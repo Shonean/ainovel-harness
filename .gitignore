@@ -1,0 +1,61 @@
+# ===== 数据与私有资产（永不入库）=====
+# 数据库与运行数据
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+
+# 语料库（版权红线）
+corpus/
+
+# 调优 IP（本公开仓不携带；如自行获取请勿提交）
+config/genres/
+config/skills/
+config/templates/
+config/scorer_params.json
+prompt-harness/data/
+app/references/
+
+# 运行产出与日志
+logs/
+harness_runs/
+*.log
+*.jsonl.tmp
+
+# 环境与密钥
+.env
+*.env
+!.env.example
+
+# 个人工作流配置
+.claude/
+.agents/
+.codex/
+.gemini/
+.trellis/
+AGENTS.md
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# ===== Node / 构建 =====
+node_modules/
+dist/
+.npm-cache/
+
+# ===== 桌面壳构建 =====
+**/src-tauri/target/
+
+# ===== OS / 编辑器 =====
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+nul

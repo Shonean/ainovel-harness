@@ -1,0 +1,289 @@
+        // 【常驻编辑卡】l4 场景卡 = 全并集（场景字段就地可编辑 + 节拍/素材/留空/备注/统计/提示）
+        const renderWbL4Card = () => {
+            const scenes = wbL4Draft !== null ? wbL4Draft : l4scenes
+            if (!scenes.length) return <span style={{ color: 'var(--ink-mute)' }}>（未生成 — 在右侧点「生成下一级」）</span>
+            const setSc = (i, field, val) => setWbL4Draft(arr => {
+                const base = arr !== null ? JSON.parse(JSON.stringify(arr)) : JSON.parse(JSON.stringify(l4scenes))
+                base[i][field] = val
+                return base
+            })
+            const listText = (v) => Array.isArray(v) ? v.join('\n') : ''
+            const lines = (s) => (s || '').split('\n').map(x => x.trim()).filter(Boolean)
+            const inp = { width: '100%', boxSizing: 'border-box', padding: 6, borderRadius: 6, border: '1px solid var(--line-soft)', fontSize: 13, marginTop: 4 }
+            const sceneFrags = (i) => (fragments || []).filter(f => f.scene_idx === i)
+            const sceneNotes = (i) => (notes || []).filter(n => (n.scope || '').includes(`scene${i}`))
+
+            // 素材光标位置（textarea onSelect/onClick/onKeyUp 更新）
+            const markCursor = (i) => {
+                const ta = fragRefs.current[i]
+                if (ta) fragCursor.current[i] = { start: ta.selectionStart ?? ta.value.length, end: ta.selectionEnd ?? ta.value.length }
+            }
+            // 工具栏插入：按光标位置插入对应内容
+            const insertAtCursor = (i, kind) => {
+                const ta = fragRefs.current[i]
+                const cur = (l4FragDraft[i] || {}).content || ''
+                const pos = (fragCursor.current[i] && fragCursor.current[i].start != null) ? fragCursor.current[i] : { start: cur.length, end: cur.length }
+                const start = Math.max(0, Math.min(pos.start, cur.length))
+                const end = Math.max(start, Math.min(pos.end, cur.length))
+                if (kind === 'blank') {
+                    const sel = cur.slice(start, end)
+                    const inserted = sel ? `[${sel}]` : '[]'
+                    const next = cur.slice(0, start) + inserted + cur.slice(end)
+                    setL4FragDraft(d => ({ ...d, [i]: { type: 'detail', content: next } }))
+                } else {
+                    const prefix = { dialogue: '对白', detail: '细节', action: '动作', item: '物品', character: '角色', setting: '设定' }[kind] || '素材'
+                    const pad = start > 0 && cur[start - 1] !== '\n' ? '\n\n' : ''
+                    const insert = `${pad}[${prefix}] `
+                    const next = cur.slice(0, start) + insert + cur.slice(end)
+                    const ftype = kind === 'item_card' ? 'item' : kind === 'char_card' ? 'character' : kind === 'setting_card' ? 'setting' : kind
+                    setL4FragDraft(d => ({ ...d, [i]: { type: ftype, content: next } }))
+                }
+                setTimeout(() => { const t2 = fragRefs.current[i]; if (t2) t2.focus() }, 0)
+            }
+            // 保存素材草稿到 fragments.json
+            const saveFrag = async (i) => {
+                const draft = l4FragDraft[i]
+                if (!draft?.content?.trim()) { setError('素材内容不能为空'); return }
+                try {
+                    await phFragmentsPut({ book_root: bookRoot, arc_id: activeArcId, ftype: draft.type || 'detail', content: draft.content.trim(), scene_idx: i })
+                    setNotice('素材已保存')
+                    setL4FragDraft(d => { const n = { ...d }; delete n[i]; return n })
+                    await refreshWorkbench(bookRoot)
+                } catch (e) { setError(`素材保存失败：${e.message || e}`) }
+            }
+            // 段级备注：勾选节拍 → prompt 输入 → 创建 note
+            const addBeatNote = async (i) => {
+                const sel = l4BeatSelected[i]
+                if (!sel || sel.size === 0) { setError('请先勾选要备注的节拍'); return }
+                const content = prompt('请输入段级备注内容：')
+                if (!content?.trim()) return
+                const beatStr = Array.from(sel).sort().join(',')
+                try {
+                    await phNotesPut({ book_root: bookRoot, scope: `arc:${activeArcId}:scene${i}:beats:${beatStr}`, content: content.trim() })
+                    setNotice('段级备注已保存')
+                    setL4BeatSelected(d => ({ ...d, [i]: new Set() }))
+                    await refreshWorkbench(bookRoot)
+                } catch (e) { setError(`备注保存失败：${e.message || e}`) }
+            }
+            const toggleBeat = (i, bi) => setL4BeatSelected(d => {
+                const prev = d[i] || new Set()
+                const next = new Set(prev)
+                if (next.has(bi)) next.delete(bi); else next.add(bi)
+                return { ...d, [i]: next }
+            })
+            // 保存整个 l4（scenes 数组 → 后端清下游）
+            const saveAllL4 = async () => {
+                const r = await run('保存 l4', () => phAiArcSetLevel(bookRoot, activeArcId, 'l4', '', scenes, null))
+                if (r?.ok) {
+                    setNotice('l4 已保存（l5 已清空，需重新生成）')
+                    setWbL4Draft(null)
+                    setL4FragDraft({}); setL4BeatSelected({})
+                    await refreshWorkbench(bookRoot)
+                }
+            }
+            const toolbar = [
+                { type: 'blank', label: '⬜ 留空', desc: '选中文本 → 包成 [意图]，或插 []' },
+                { type: 'dialogue', label: '+ 对白', desc: '光标处插入 [对白]' },
+                { type: 'detail', label: '+ 细节', desc: '光标处插入 [细节]' },
+                { type: 'action', label: '+ 动作', desc: '光标处插入 [动作]' },
+                { type: 'item_card', label: '+ 物品卡', desc: '光标处插入 [物品]' },
+                { type: 'char_card', label: '+ 角色卡', desc: '光标处插入 [角色]' },
+            ]
+            const elemGroups = [{ key: 'characters', label: '角色', icon: '👤' }, { key: 'items', label: '物品', icon: '🗡️' }, { key: 'settings', label: '设定', icon: '🏛' }, { key: 'maps', label: '地图', icon: '🗺️' }]
+            return (
+                <div style={{ padding: '4px 0' }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span>l4 场景（{scenes.length} 个 · 点击字段直接编辑）</span>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                            <button style={btnStyle(busy, true)} disabled={busy} onClick={saveAllL4} className="wb-l4-save">💾 保存</button>
+                            <button style={btnStyle(false, false)} onClick={() => { setWbL4Draft(null); setL4FragDraft({}); setL4BeatSelected({}) }} className="wb-l4-cancel">还原</button>
+                        </div>
+                    </div>
+                    {scenes.map((sc, i) => {
+                        const selSet = l4BeatSelected[i] || new Set()
+                        const beats = sc.beats || []
+                        const sFrags = sceneFrags(i)
+                        const selectedIds = new Set(sc.elements || [])
+                        const parsedDialogues = (sc.dialogues || []).map(parseDialogue)
+                        const blanksFromText = []
+                        sFrags.forEach(f => {
+                            const txt = String(f.content || f.text || '')
+                            const re = /\[([^\[\]]+)\]/g
+                            let m
+                            while ((m = re.exec(txt)) !== null) blanksFromText.push(m[1].trim())
+                        })
+                        const dlgFrags = sFrags.filter(f => (f.type || '').includes('对白') || (f.type || '').includes('dialogue'))
+                        return (
+                            <div key={i} style={{ border: '1px solid var(--line)', borderRadius: 6, padding: 8, marginBottom: 8, background: 'var(--paper)' }}>
+                                {/* 头：序号 + 场景名 + 环境 + ✕ */}
+                                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                    <span style={{ background: 'var(--cinnabar)', color: 'var(--paper-raised)', padding: '2px 8px', borderRadius: 2, fontSize: 10, fontWeight: 700, flexShrink: 0 }}>场景 {i + 1}</span>
+                                    <input style={{ ...inp, marginTop: 0, flex: 1 }} value={sc.name || ''} onChange={e => setSc(i, 'name', e.target.value)} placeholder="场景名" />
+                                    <input style={{ ...inp, marginTop: 0, flex: 1 }} value={sc.environment || ''} onChange={e => setSc(i, 'environment', e.target.value)} placeholder="环境" />
+                                    <button style={btnStyle(false, false)} onClick={() => setWbL4Draft(arr => (arr !== null ? arr : JSON.parse(JSON.stringify(l4scenes))).filter((_, j) => j !== i))}>✕</button>
+                                </div>
+
+                                {/* 出场元素（点击切换） */}
+                                <div style={{ marginTop: 4 }}>
+                                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-sub)' }}>🎭 出场元素{(sc.elements || []).length > 0 && <span style={{ fontWeight: 400, color: 'var(--dai)', marginLeft: 4 }}>({(sc.elements || []).length} 已选)</span>}</label>
+                                    <div style={{ marginTop: 4 }}>
+                                        {elemGroups.map(g => {
+                                            const elems = flatElements.filter(e => e.kind === g.key)
+                                            if (elems.length === 0) return null
+                                            const sorted = [...elems].sort((a, b) => (selectedIds.has(a.id) ? 0 : 1) - (selectedIds.has(b.id) ? 0 : 1))
+                                            return (
+                                                <div key={g.key} style={{ marginBottom: 4 }}>
+                                                    <div style={{ fontSize: 10, color: 'var(--ink-mute)', marginBottom: 2 }}>{g.icon} {g.label}</div>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                                                        {sorted.map(e => {
+                                                            const bound = selectedIds.has(e.id)
+                                                            return (
+                                                                <button key={e.id} style={{ padding: '2px 8px', borderRadius: 12, fontSize: 11, cursor: 'pointer', border: `1px solid ${bound ? 'var(--dai)' : 'var(--line-soft)'}`, background: bound ? 'var(--dai-wash)' : 'var(--paper-raised)', color: bound ? 'var(--dai)' : 'var(--ink-sub)', fontWeight: bound ? 600 : 400 }} onClick={() => setSc(i, 'elements', bound ? (sc.elements || []).filter(x => x !== e.id) : [...(sc.elements || []), e.id])}>
+                                                                    {e.name || e.id}
+                                                                </button>
+                                                            )
+                                                        })}
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                        {flatElements.length === 0 && <span style={{ fontSize: 11, color: 'var(--ink-mute)' }}>（无元素）</span>}
+                                    </div>
+                                </div>
+
+                                {/* 节拍（勾选 + 段级备注） */}
+                                {beats.length > 0 && (
+                                    <div style={{ marginTop: 4 }}>
+                                        <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-sub)' }}>🎯 节拍{selSet.size > 0 && <span style={{ fontWeight: 400, color: 'var(--dai)', marginLeft: 4 }}>(已选 {selSet.size} 条)</span>}</label>
+                                        <div style={{ marginTop: 4, border: '1px solid var(--line-soft)', borderRadius: 4, overflow: 'hidden' }}>
+                                            {beats.map((beat, bi) => (
+                                                <div key={bi} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 8px', fontSize: 12, background: selSet.has(bi) ? 'var(--dai-wash)' : 'var(--paper)', borderBottom: bi < beats.length - 1 ? '1px solid var(--line-soft)' : 'none' }}>
+                                                    <input type="checkbox" checked={selSet.has(bi)} onChange={() => toggleBeat(i, bi)} style={{ flexShrink: 0 }} />
+                                                    <span style={{ flex: 1, color: selSet.has(bi) ? 'var(--dai)' : 'var(--ink)' }}>{beat}</span>
+                                                    <span style={{ fontSize: 10, color: 'var(--ink-mute)' }}>#{bi + 1}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        {selSet.size > 0 && <button style={{ ...btnStyle(false, false), marginTop: 4, fontSize: 11 }} onClick={() => addBeatNote(i)}>📝 段级备注</button>}
+                                    </div>
+                                )}
+
+                                {/* 动作 / 冲突 / 细节 */}
+                                <div style={{ marginTop: 4 }}>
+                                    <label style={{ fontSize: 11, color: 'var(--ink-sub)' }}>⚡ 动作{(sc.actions || []).length > 0 && <span style={{ color: 'var(--ink-mute)', fontWeight: 400 }}> ({(sc.actions || []).length})</span>}</label>
+                                    <textarea value={listText(sc.actions)} onChange={e => setSc(i, 'actions', lines(e.target.value))} rows={2} placeholder="动作（每行一条）" style={inp} />
+                                </div>
+                                <div style={{ marginTop: 4 }}>
+                                    <label style={{ fontSize: 11, color: 'var(--ink-sub)' }}>⚔️ 冲突{(sc.conflicts || []).length > 0 && <span style={{ color: 'var(--ink-mute)', fontWeight: 400 }}> ({(sc.conflicts || []).length})</span>}</label>
+                                    <textarea value={listText(sc.conflicts)} onChange={e => setSc(i, 'conflicts', lines(e.target.value))} rows={2} placeholder="冲突（每行一条）" style={inp} />
+                                </div>
+                                <div style={{ marginTop: 4 }}>
+                                    <label style={{ fontSize: 11, color: 'var(--ink-sub)' }}>🔍 细节{(sc.details || []).length > 0 && <span style={{ color: 'var(--ink-mute)', fontWeight: 400 }}> ({(sc.details || []).length})</span>}</label>
+                                    <textarea value={listText(sc.details)} onChange={e => setSc(i, 'details', lines(e.target.value))} rows={2} placeholder="细节（每行一条）" style={inp} />
+                                </div>
+
+                                {/* 对白（紧凑逐轮行，点击行展开编辑） */}
+                                <div style={{ marginTop: 4 }}>
+                                    <label style={{ fontSize: 11, color: 'var(--ink-sub)' }}>💬 对白{(sc.dialogues || []).length > 0 && <span style={{ color: 'var(--ink-mute)', fontWeight: 400 }}> ({(sc.dialogues || []).length} 轮)</span>}</label>
+                                    <div style={{ marginTop: 4, border: '1px solid var(--line-soft)', borderRadius: 4, overflow: 'hidden', padding: '2px 4px' }}>
+                                        {(sc.dialogues || []).length === 0 ? (
+                                            <div style={{ padding: '3px 8px', fontSize: 12, color: 'var(--ink-mute)', textAlign: 'center' }}>暂无对白，点击下方添加</div>
+                                        ) : (sc.dialogues || []).map((d, di) => (
+                                            <CompactDialogueRow key={di} value={d} index={di}
+                                                onChange={newD => setSc(i, 'dialogues', (sc.dialogues || []).map((x, j) => (j === di ? newD : x)))}
+                                                onRemove={() => setSc(i, 'dialogues', (sc.dialogues || []).filter((_, j) => j !== di))} />
+                                        ))}
+                                    </div>
+                                    <button style={{ ...btnStyle(false, false), marginTop: 4, fontSize: 11 }} onClick={() => setSc(i, 'dialogues', [...(sc.dialogues || []), '角色：台词'])}>+ 添加对白</button>
+                                    {parsedDialogues.length > 0 && (
+                                        <div style={{ fontSize: 11, color: 'var(--ink-mute)', marginTop: 4, fontStyle: 'italic' }}>
+                                            （已有 {parsedDialogues.length} 轮指定对白原样写入 l5；{dlgFrags.length > 0 ? '节拍中的对白素材覆盖，' : ''}其余对白/心理由 l5 生成时 LLM 自行创作）
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* 素材编辑区（工具栏光标插入 + 草稿 + 保存 + 已有列表） */}
+                                <div style={{ marginTop: 4 }}>
+                                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-sub)' }}>📎 素材编辑{sFrags.length > 0 && <span style={{ fontWeight: 400, color: 'var(--ink-mute)', marginLeft: 4 }}>({sFrags.length} 条)</span>}</label>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 4, marginBottom: 4 }}>
+                                        {toolbar.map(tb => (
+                                            <button key={tb.type} title={tb.desc} style={{ padding: '3px 8px', borderRadius: 4, fontSize: 11, cursor: 'pointer', border: '1px solid var(--line-soft)', background: (l4FragDraft[i] || {}).type === tb.type.replace('_card', '') ? 'var(--dai-wash)' : 'var(--paper-raised)', color: (l4FragDraft[i] || {}).type === tb.type.replace('_card', '') ? 'var(--dai)' : 'var(--ink-sub)' }} onClick={() => insertAtCursor(i, tb.type)}>
+                                                {tb.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                    <textarea ref={el => { fragRefs.current[i] = el }}
+                                        value={(l4FragDraft[i] || {}).content || ''}
+                                        onSelect={() => markCursor(i)} onClick={() => markCursor(i)} onKeyUp={() => markCursor(i)}
+                                        onChange={e => setL4FragDraft(d => ({ ...d, [i]: { ...(d[i] || { type: 'detail' }), content: e.target.value } }))}
+                                        rows={3} placeholder="输入素材内容；把光标放在要插入的位置，点上方按钮插入对应片段；选中文字点「⬜ 留空」包成 [意图]"
+                                        style={{ ...inp, fontFamily: 'var(--font-mono)' }} />
+                                    <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                                        <select value={(l4FragDraft[i] || {}).type || 'detail'} onChange={e => setL4FragDraft(d => ({ ...d, [i]: { ...(d[i] || { content: '' }), type: e.target.value } }))} style={{ fontSize: 11, padding: '2px 6px', border: '1px solid var(--line)', borderRadius: 4 }}>
+                                            <option value="detail">📝 细节</option>
+                                            <option value="dialogue">💬 对白</option>
+                                            <option value="action">⚡ 动作</option>
+                                            <option value="item">🗡️ 物品</option>
+                                            <option value="character">👤 角色</option>
+                                            <option value="setting">🏛 设定</option>
+                                        </select>
+                                        <button style={btnStyle(false, true)} onClick={() => saveFrag(i)}>💾 保存素材</button>
+                                    </div>
+                                    {sFrags.length > 0 && (
+                                        <div style={{ marginTop: 6, fontSize: 11 }}>
+                                            {(() => {
+                                                const groups = {}
+                                                sFrags.forEach(f => { const t = f.type || 'detail'; if (!groups[t]) groups[t] = []; groups[t].push(f) })
+                                                const typeIcons = { dialogue: '💬', detail: '📝', action: '⚡', item: '🗡️', character: '👤', setting: '🏛' }
+                                                return Object.entries(groups).map(([type, list]) => (
+                                                    <div key={type} style={{ marginBottom: 4 }}>
+                                                        <div style={{ color: 'var(--ink-sub)', marginBottom: 2, fontWeight: 500 }}>{typeIcons[type] || '📎'} {type} ({list.length})</div>
+                                                        {list.map(f => (
+                                                            <div key={f.id} style={{ padding: '3px 6px', background: 'var(--bg-card-2)', borderRadius: 4, marginBottom: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                                <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(f.content || '').slice(0, 80)}{(f.content || '').length > 80 ? '…' : ''}</span>
+                                                                <button style={{ fontSize: 10, color: 'var(--red)', cursor: 'pointer', border: 'none', background: 'none', flexShrink: 0, marginLeft: 4 }} onClick={async () => { await phFragmentsPut({ book_root: bookRoot, fid: f.id }); await refreshWorkbench(bookRoot) }}>✕</button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ))
+                                            })()}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* 留空槽（从素材文本提取 [意图]） */}
+                                {blanksFromText.length > 0 && (
+                                    <div style={{ marginTop: 4 }}>
+                                        <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-sub)' }}>⬜ 留空槽 <span style={{ fontWeight: 400, color: 'var(--ink-mute)' }}>({blanksFromText.length} 个)</span></label>
+                                        <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                                            {blanksFromText.map((intention, bi) => (
+                                                <span key={bi} style={{ display: 'inline-block', padding: '2px 8px', fontSize: 11, background: 'var(--amber-wash)', border: '1px dashed var(--amber)', color: 'var(--amber)', borderRadius: 2 }}>{intention || '空位'}</span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* 场景备注 + 已有备注 */}
+                                <div style={{ marginTop: 4 }}>
+                                    <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--ink-sub)' }}>📋 场景备注</label>
+                                    <textarea value={sc.scene_note || ''} onChange={e => setSc(i, 'scene_note', e.target.value)} rows={2} placeholder="场景级备注（不影响正文，仅供 AI 参考）" style={inp} />
+                                    {sceneNotes(i).length > 0 && <div style={{ marginTop: 4, fontSize: 11, color: 'var(--ink-sub)' }}>已有备注：{sceneNotes(i).map(n => n.content).join('；')}</div>}
+                                </div>
+
+                                {/* 叶子统计 */}
+                                <div style={{ marginTop: 6, fontSize: 10, color: 'var(--ink-mute)', display: 'flex', gap: 8 }}>
+                                    <span>⚡ {(sc.actions || []).length} 动作</span>
+                                    <span>💬 {(sc.dialogues || []).length} 对白</span>
+                                    <span>⚔️ {(sc.conflicts || []).length} 冲突</span>
+                                    <span>🔍 {(sc.details || []).length} 细节</span>
+                                </div>
+                            </div>
+                        )
+                    })}
+                    <button style={{ ...btnStyle(false, false), marginBottom: 6 }} onClick={() => setWbL4Draft(arr => [...(arr !== null ? arr : JSON.parse(JSON.stringify(l4scenes))), { name: '新场景', environment: '', actions: [], dialogues: [], conflicts: [], details: [], elements: [], scene_note: '' }])}>+ 添加场景</button>
+                    <div style={{ marginTop: 8, padding: '10px 14px', background: 'var(--dai-wash)', borderRadius: 2, fontSize: 12, color: 'var(--dai-dark)', borderLeft: '3px solid var(--dai)' }}>
+                        <b>l4 → l5：</b>场景的 l4 内容已足够——节拍明确了叙事顺序，素材提供了固定内容，留空标记了 LLM 需要填充的部分。生成 l5 时，按节拍逐段写，有素材用素材，有留空按意图填充，无素材的节拍由 LLM 自由发挥。
+                    </div>
+                </div>
+            )
+        }
