@@ -1,8 +1,8 @@
 [package]
 name = "ainovel-write"
 version = "0.1.0"
-description = "AInovel Harness - AI-assisted novel creation"
-authors = ["ainovel-write"]
+description = "AInovel Harness - layered prompt engine with ablation-based evaluation for long-form fiction"
+authors = ["Shonean"]
 edition = "2021"
 
 [lib]
