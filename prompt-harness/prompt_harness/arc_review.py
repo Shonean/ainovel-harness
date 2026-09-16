@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """v5.25 剧情桥段审阅模块：逐弧线 LLM 审阅。
 
-用户需求（2026-08-05）：v5.24 已完成 4 张 arc_map 表（示例书 108 段 + 示例书D 198 段
+用户需求（2026-08-05）：v5.24 已完成 4 张 arc_map 表（青山 108 段 + 大奉 198 段
 = 306 段），但：
 1. **标签过度概括**：有些情节是本书特有的，被现有子节点标签概括得太笼统（如
    「朝堂博弈」体现不出「国舅调换军粮」这类具体剧情），对后续按原型建模板产生噪声
@@ -243,7 +243,7 @@ async def review_arc_map(
     """对一张 arc_map 的（全部或前 N 段）弧线做 LLM 审阅。
 
     Args:
-        filepath: 相对 corpus_dir 的 txt 路径（如 玄幻武侠/示例书/示例书(1-500章).txt）
+        filepath: 相对 corpus_dir 的 txt 路径（如 玄幻武侠/青山/青山(1-500章).txt）
         arc_map: 已加载的 arc_map dict（含 arcs 列表）
         registry: 剧情库注册表（archetypes.json 的 archetypes 列表）
         progress: 进度回调

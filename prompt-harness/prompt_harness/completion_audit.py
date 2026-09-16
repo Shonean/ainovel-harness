@@ -25,7 +25,7 @@ _PLACEHOLDER_RE = re.compile(r"\.\.\.|……|（?等）?$|^\s*$|等等|省略|�
 _STRAIGHT_DQUOTE = '"'
 _BRACKET_QUOTE_RE = re.compile(r"[「」『』]")
 # 事实里切分专有名词：按常见动词/虚词/标点把事实句切成名词片段
-# （「林川在医院遇见王慧兰」→ 林川 / 医院 / 王慧兰），再取 2-6 字 CJK 片段。
+# （「陈迹在医院遇见王慧玲」→ 陈迹 / 医院 / 王慧玲），再取 2-6 字 CJK 片段。
 _FACT_SPLIT_RE = re.compile(
     r"[，。、；：的在了和与跟把被是有去到见告诉给让向从对为以将于发现遇见"
     r"找到拿到拿走送来带去说问答看听哭笑打骂想知道带着拿着]")
@@ -69,7 +69,7 @@ def audit_l4(
     """核对场景分解是否完整可写。
 
     facts：extract_key_facts 提取的不可变事实句；检查其中的专名（≥3 字 CJK 串）
-    是否仍出现在场景文本里（防改名/丢失，如 王慧兰→张兰）。
+    是否仍出现在场景文本里（防改名/丢失，如 王慧玲→张兰）。
     """
     findings: list[dict[str, Any]] = []
     scenes = [s for s in (scenes or []) if isinstance(s, dict)]

@@ -1,0 +1,56 @@
+{
+  "name": "ainovel-harness-desktop",
+  "version": "0.1.0",
+  "description": "AInovel Harness 创作驾驶舱（Electron 桌面端）：五级阶梯写作流水线 + Copilot 式创作助手",
+  "main": "src/main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "\"D:/electron/dist/electron.exe\" .",
+    "smoke": "node src/smoke.js",
+    "dist": "electron-builder --win portable",
+    "typecheck": "node --check src/main.js && node --check src/core/backend.js && node --check src/core/rpc.js && node --check src/core/rest.js && node --check src/core/bridge.js"
+  },
+  "dependencies": {
+    "ws": "^8.17.0"
+  },
+  "devDependencies": {
+    "electron-builder": "^24.13.3",
+    "rcedit": "^5.0.1"
+  },
+  "build": {
+    "appId": "com.ainovel.harness.desktop",
+    "productName": "AInovel Harness",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**",
+      "media/**",
+      "package.json"
+    ],
+    "asar": false,
+    "extraResources": [
+      {
+        "from": "../app/dashboard/frontend/dist",
+        "to": "dashboard-dist"
+      }
+    ],
+    "electronDist": "D:/electron/dist",
+    "electronVersion": "33.4.11",
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "media/icon.ico"
+    },
+    "portable": {
+      "artifactName": "AInovel-Harness-${version}.exe"
+    }
+  }
+}

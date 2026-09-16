@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -141,6 +142,41 @@ _llm_log_dir: Path | None = None
 _llm_log_file = None
 _llm_log_date: str = ""  # YYYYMMDD，用于自动换日
 
+# 【T32 P4】运行级用量累计：批量任务设置 run_id 后，其内所有 LLM 调用
+# （含子任务，ContextVar 随协程复制）累计 tokens/费用，供生产线统计。
+_llm_run_id: ContextVar[str] = ContextVar("ainovel_llm_run_id", default="")
+_run_usage: dict[str, dict[str, Any]] = {}
+
+
+def set_llm_run_id(run_id: str | None) -> None:
+    _llm_run_id.set(str(run_id or ""))
+
+
+def get_run_usage(run_id: str) -> dict[str, Any]:
+    d = _run_usage.get(str(run_id or "")) or {}
+    return {
+        "calls": int(d.get("calls") or 0),
+        "prompt_tokens": int(d.get("prompt_tokens") or 0),
+        "completion_tokens": int(d.get("completion_tokens") or 0),
+        "total_tokens": int(d.get("total_tokens") or 0),
+        "cost_usd": round(float(d.get("cost_usd") or 0.0), 4),
+    }
+
+
+def _accumulate_run_usage(record: dict[str, Any]) -> None:
+    rid = _llm_run_id.get()
+    if not rid:
+        return
+    d = _run_usage.setdefault(rid, {
+        "calls": 0, "prompt_tokens": 0, "completion_tokens": 0,
+        "total_tokens": 0, "cost_usd": 0.0,
+    })
+    d["calls"] += 1
+    d["prompt_tokens"] += int(record.get("prompt_tokens") or 0)
+    d["completion_tokens"] += int(record.get("completion_tokens") or 0)
+    d["total_tokens"] += int(record.get("total_tokens") or 0)
+    d["cost_usd"] += float(record.get("cost_usd") or 0.0)
+
 
 def _get_llm_log_file():
     """获取今日的 LLM 日志文件（懒加载 + 自动换日）。"""
@@ -167,6 +203,7 @@ def _get_llm_log_file():
 
 def _write_llm_log(record: dict[str, Any]) -> None:
     """写一条 LLM 调用日志（jsonl 双写 + llm_calls 表；表是查询聚合的正主）。"""
+    _accumulate_run_usage(record)
     try:
         fh = _get_llm_log_file()
         fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
@@ -307,6 +344,14 @@ async def chat_completion(
     # 最高层：函数显式传入的参数（有值才覆盖）
     if _param_api_key:
         api_key = _param_api_key
+    # 【T32 P4】量产批量：运行级模型覆盖（低于显式参数，高于 env/SETTINGS）
+    try:
+        from .runtime_flags import get_model as _get_override_model
+        _ov = _get_override_model()
+        if _ov:
+            model = _ov
+    except Exception:  # noqa: BLE001
+        pass
     if _param_model:
         model = _param_model
     if _param_base_url:

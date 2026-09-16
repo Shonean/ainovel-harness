@@ -106,7 +106,31 @@ class Settings:
     derive_scene_target_len: int = 600
 
 
-SETTINGS = Settings()
+def _scorer_param_overrides() -> dict:
+    """【Phase 2-full 修复 2026-09-04】模块级 SETTINGS 也收敛到 scorer_params.json。
+
+    原先只有 init_settings()（主应用启动才调用）读 JSON，standalone 进程
+    （promptopt trainer / 冻结验证 / 离线脚本）全部拿到 dataclass 硬编码 v1 默认值，
+    导致「冻结评分器」纪律对独立进程从未生效（Phase 3 T17 实际跑的是 v1 权重）。
+    env 优先级只在 init_settings 保持（与主应用行为一致）；JSON 缺失时
+    get_weight/get_int 回退内置默认（=原 dataclass 值），行为兼容。
+    """
+    from . import scorer_params as _sp
+    return {
+        "v519_w_char": _sp.get_weight("v519_w_char"),
+        "v519_w_plot": _sp.get_weight("v519_w_plot"),
+        "v519_w_syn": _sp.get_weight("v519_w_syn"),
+        "v519_n_min": _sp.get_int("v519_n_min"),
+        "v519_n_max": _sp.get_int("v519_n_max"),
+        "v519_embed_gap": _sp.get_weight("v519_embed_gap"),
+        "v521_turn_weight": _sp.get_weight("v521_turn_weight"),
+        "v521_turn_match_thresh": _sp.get_weight("v521_turn_match_thresh"),
+        "ai_flavor_penalty": _sp.get_weight("ai_flavor_penalty"),
+        "derive_ai_flavor_threshold": _sp.get_weight("derive_ai_flavor_threshold"),
+    }
+
+
+SETTINGS = Settings(**_scorer_param_overrides())
 
 
 def init_settings(

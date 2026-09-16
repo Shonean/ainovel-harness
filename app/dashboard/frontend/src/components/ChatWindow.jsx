@@ -37,8 +37,11 @@ const getPendingFields = (pc) => {
  *  - pendingConfirm: {summary, detail} | null（finalize 待确认）
  *  - onConfirm / onCancel: 确认/取消待确认动作
  *  - compact: boolean（新工作台右栏用：隐藏自带输入框，空状态显示引导卡片）
+ *  - 【Phase 3 会话管理】sessions: [{id,title,updated_at}] | null（传了才渲染顶部会话条）
+ *    currentSessionId / onNewSession / onSelectSession / onDeleteSession：会话条行为
+ *  - onDeleteMessage: (idx) => void（消息级「删除这段对话」，传了才在消息上显示 ✕）
  */
-export default function ChatWindow({ messages, onSend, busy, disabled, pendingConfirm, onConfirm, onCancel, compact, placeholder, inputValue, onInputChange, historyKey = 'ainovel-chat-history' }) {
+export default function ChatWindow({ messages, onSend, busy, disabled, pendingConfirm, onConfirm, onCancel, compact, placeholder, inputValue, onInputChange, historyKey = 'ainovel-chat-history', sessions = null, currentSessionId = '', onNewSession, onSelectSession, onDeleteSession, onDeleteMessage }) {
     const [internalInput, setInternalInput] = useState('')
     const boxRef = useRef(null)
     // 使用外部控制的input或内部状态
@@ -120,6 +123,13 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
 
     const preStyle = { whiteSpace: 'pre-wrap', fontSize: 13, lineHeight: 1.7, margin: 0 }
 
+    // 【Phase 4】流式渲染：空气泡兜底「正在思考…」+ 增量文本尾部闪烁光标
+    const streamBody = (m) => {
+        if (!m.streaming) return m.content
+        if (!m.content) return <span style={{ color: 'var(--ink-mute)' }}>正在思考<span className="cw-cursor">▍</span></span>
+        return <>{m.content}<span className="cw-cursor">▍</span></>
+    }
+
     // 确认按钮文字（根据工具类型动态显示）
     const confirmLabel = (() => {
         const t = pendingConfirm?.tool
@@ -141,6 +151,44 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
         { icon: '', text: '扩写这段场景', action: '扩写一下当前场景' },
     ]
 
+    // 【Phase 3】会话条：＋新建对话 / 历史会话 chips（点击切换 / ✕ 删除整段）
+    const sessionBar = sessions && (onNewSession || onSelectSession) ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, overflowX: 'auto', paddingBottom: 2 }}>
+            {onNewSession && (
+                <button onClick={onNewSession} title="新建一段对话"
+                    style={{
+                        flexShrink: 0, fontSize: 11, padding: '3px 8px', borderRadius: 12, cursor: 'pointer',
+                        border: '1px solid var(--dai)', background: 'var(--dai-wash)', color: 'var(--dai-dark)', fontWeight: 600,
+                    }}>
+                    ＋ 新对话
+                </button>
+            )}
+            {(sessions || []).map(s => {
+                const active = s.id === currentSessionId
+                return (
+                    <span key={s.id} onClick={() => !active && onSelectSession && onSelectSession(s.id)}
+                        title={`${s.title || '新对话'}${s.updated_at ? `（${String(s.updated_at).slice(5, 16).replace('T', ' ')}）` : ''}——点击切换`}
+                        style={{
+                            flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4,
+                            fontSize: 11, padding: '3px 8px', borderRadius: 12, cursor: 'pointer',
+                            maxWidth: 150, whiteSpace: 'nowrap',
+                            border: `1px solid ${active ? 'var(--dai)' : 'var(--line)'}`,
+                            background: active ? 'var(--dai-wash)' : 'var(--paper-raised)',
+                            color: active ? 'var(--dai-dark)' : 'var(--ink-sub)',
+                            fontWeight: active ? 600 : 400,
+                        }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.title || '新对话'}</span>
+                        {onDeleteSession && (
+                            <span onClick={e => { e.stopPropagation(); if (window.confirm(`删除整段对话「${s.title || '新对话'}」？`)) onDeleteSession(s.id) }}
+                                title="删除整段对话"
+                                style={{ color: 'var(--ink-mute)', fontSize: 10, padding: '0 1px' }}>✕</span>
+                        )}
+                    </span>
+                )
+            })}
+        </div>
+    ) : null
+
     if (compact) {
         // 新工作台右栏版：占满空间，空状态引导卡片
         const empty = messages.length === 0
@@ -152,7 +200,22 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
                 gap: 10,
                 padding: '2px 2px 2px 0',
             }}>
-                {empty && <div style={{ height: 8 }} />}
+                {sessionBar}
+
+                {empty && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                        {quickPrompts.map(q => (
+                            <span key={q.text}
+                                onClick={() => { if (!busy && !disabled) onSend(q.action) }}
+                                style={{
+                                    fontSize: 11.5, padding: '4px 10px', borderRadius: 12, cursor: disabled || busy ? 'default' : 'pointer',
+                                    border: '1px solid var(--line)', background: 'var(--paper-raised)', color: 'var(--ink-sub)',
+                                }}>
+                                {q.icon} {q.text}
+                            </span>
+                        ))}
+                    </div>
+                )}
 
                 {!empty && messages.map((m, i) => (
                     <div key={i} style={{ marginBottom: 4 }}>
@@ -162,8 +225,13 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
                             color: m.role === 'user' ? 'var(--dai-dark)' : 'var(--green-dark)',
                             marginBottom: 3,
                             fontFamily: 'var(--font-sans)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                         }}>
-                            {m.role === 'user' ? '你' : 'AI'}
+                            <span>{m.role === 'user' ? '你' : 'AI'}</span>
+                            {onDeleteMessage && !busy && (
+                                <span onClick={() => onDeleteMessage(i)} title="删除这段对话"
+                                    style={{ fontSize: 10, color: 'var(--ink-mute)', cursor: 'pointer', fontWeight: 400 }}>✕</span>
+                            )}
                         </div>
                         {Array.isArray(m.tool_events) && m.tool_events.length > 0 && (
                             <div style={{ margin: '4px 0 6px', padding: 6, background: 'var(--cinnabar-wash)', border: '1px solid var(--cinnabar-border)', borderRadius: 4, fontSize: 11 }}>
@@ -180,7 +248,7 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
                                 ))}
                             </div>
                         )}
-                        <pre style={{ ...preStyle, color: 'var(--ink)', fontSize: 12.5 }}>{m.content}</pre>
+                        <pre style={{ ...preStyle, color: 'var(--ink)', fontSize: 12.5 }}>{streamBody(m)}</pre>
                     </div>
                 ))}
 
@@ -200,7 +268,7 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
                             <button
-                                onClick={onConfirm}
+                                onClick={() => onConfirm()}
                                 style={{
                                     padding: '5px 10px', borderRadius: 3,
                                     border: '1px solid var(--cinnabar-d)', background: 'var(--cinnabar-d)',
@@ -269,6 +337,7 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
     return (
         <div className="section-block" style={{ borderLeft: '3px solid var(--cinnabar)', marginTop: 10 }}>
             <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>与 AI 对话（工具循环：预检索 + 可执行动作）</div>
+            {sessionBar && <div style={{ marginBottom: 8 }}>{sessionBar}</div>}
             <div ref={boxRef} style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 6, padding: 8, marginBottom: 8 }}>
                 {messages.length === 0 && (
                     <div style={{ color: 'var(--ink-mute)', fontSize: 13 }}>
@@ -280,6 +349,10 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
                         <b style={{ fontSize: 12, color: m.role === 'user' ? 'var(--dai)' : 'var(--green)' }}>
                             {m.role === 'user' ? '你' : 'AI'}：
                         </b>
+                        {onDeleteMessage && !busy && (
+                            <span onClick={() => onDeleteMessage(i)} title="删除这段对话"
+                                style={{ float: 'right', fontSize: 11, color: 'var(--ink-mute)', cursor: 'pointer' }}>✕</span>
+                        )}
                         {Array.isArray(m.tool_events) && m.tool_events.length > 0 && (
                             <div style={{ margin: '4px 0', padding: 6, background: 'var(--cinnabar-wash)', borderRadius: 6, fontSize: 12 }}>
                                 {m.tool_events.map((ev, j) => (
@@ -295,7 +368,7 @@ export default function ChatWindow({ messages, onSend, busy, disabled, pendingCo
                                 ))}
                             </div>
                         )}
-                        <pre style={{ ...preStyle, color: 'var(--ink)' }}>{m.content}</pre>
+                        <pre style={{ ...preStyle, color: 'var(--ink)' }}>{streamBody(m)}</pre>
                     </div>
                 ))}
             </div>

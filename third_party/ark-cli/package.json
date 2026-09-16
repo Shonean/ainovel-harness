@@ -1,0 +1,33 @@
+{
+  "name": "@volcengine/ark-cli",
+  "version": "1.0.27",
+  "description": "火山方舟 ARK 平台命令行工具",
+  "bin": {
+    "arkcli": "scripts/run.js"
+  },
+  "files": [
+    "scripts/run.js",
+    "scripts/postinstall.js",
+    "manifest.json"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/volcengine/ark-cli.git"
+  }
+}

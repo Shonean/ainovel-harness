@@ -1,0 +1,33 @@
+{
+  "schema_version": "0.1",
+  "pack_id": "pack_demo_arc0001_c0ffee",
+  "created_at": "2026-09-12T10:00:00+08:00",
+  "source": {
+    "book_title": "演示书-纸人教室",
+    "book_root": "C:/demo/TestBook",
+    "arc_ids": ["arc_demo0001"],
+    "chapter_nums": [1],
+    "builder_version": "0.1.0"
+  },
+  "game": {
+    "title": "纸人教室",
+    "logline": "陈守念在荒废的教室中醒来，满室纸人随铃声转头。",
+    "genre_tags": ["悬疑", "恐怖"],
+    "play_minutes_est": 6,
+    "entry_node": "n001",
+    "endings": ["end_a", "end_b"]
+  },
+  "modes": {
+    "offline": true,
+    "online": { "llm_zones": "llm_zones.json", "enabled": false }
+  },
+  "files": {
+    "story": "story.json",
+    "characters": "characters.json",
+    "world": "world.json",
+    "assets": "assets.json",
+    "interaction": "interaction.json",
+    "llm_zones": "llm_zones.json",
+    "ink": "ink/story.ink.json"
+  }
+}

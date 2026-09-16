@@ -1,0 +1,16 @@
+{
+  "entities": [
+    {
+      "id": "int_cabinet",
+      "node": "n001",
+      "kind": "inspect",
+      "label": "后排储物柜",
+      "prompt": "灰绿色铁皮柜，柜顶放着一只白纸人。",
+      "result": {
+        "narration": "你拉开柜门，一股潮湿的纸味涌出来，柜顶的白纸人缓缓低头看你。",
+        "set": { "flags.saw_white_figure": true }
+      },
+      "next": null
+    }
+  ]
+}

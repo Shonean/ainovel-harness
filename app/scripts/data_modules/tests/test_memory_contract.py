@@ -38,13 +38,13 @@ class TestContractTypes:
 
     def test_entity_snapshot_roundtrip(self):
         e = EntitySnapshot(
-            id="linyue", name="林越", type="角色", tier="核心",
+            id="xiaoyan", name="萧炎", type="角色", tier="核心",
             aliases=["他"], attributes={"realm": "斗帝"},
             first_appearance=1, last_appearance=100,
             recent_state_changes=[{"field": "realm", "old": "斗圣", "new": "斗帝"}],
         )
         d = e.to_dict()
-        assert d["id"] == "linyue"
+        assert d["id"] == "xiaoyan"
         assert d["aliases"] == ["他"]
         assert len(d["recent_state_changes"]) == 1
 
@@ -54,12 +54,12 @@ class TestContractTypes:
         assert d["domain"] == "力量体系"
 
     def test_open_loop_defaults(self):
-        o = OpenLoop(id="ol1", content="出师之约")
+        o = OpenLoop(id="ol1", content="三年之约")
         assert o.status == "active"
         assert o.urgency == 0.0
 
     def test_timeline_event_to_dict(self):
-        t = TimelineEvent(event="林越突破斗帝", chapter=1500, time_hint="大结局", event_type="突破")
+        t = TimelineEvent(event="萧炎突破斗帝", chapter=1500, time_hint="大结局", event_type="突破")
         d = t.to_dict()
         assert d["chapter"] == 1500
 

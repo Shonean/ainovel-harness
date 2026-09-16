@@ -711,9 +711,9 @@ def test_ainovel_skill_flow_runs_story_contract_context_and_review_pipeline_with
                     "volumes_planned": [{"volume": 1, "chapters_range": "1-20"}],
                 },
                 "protagonist_state": {
-                    "name": "林越",
+                    "name": "萧炎",
                     "location": {"current": "天云宗外院"},
-                    "power": {"realm": "武者", "layer": 9},
+                    "power": {"realm": "斗者", "layer": 9},
                 },
                 "chapter_meta": {},
                 "disambiguation_warnings": [],
@@ -730,12 +730,12 @@ def test_ainovel_skill_flow_runs_story_contract_context_and_review_pipeline_with
         "\n".join(
             [
                 "### 第3章：试炼冲突",
-                "本章将聚焦林越与药师关系冲突，并回收旧线索真相。",
-                "CBN：林越进入试炼场",
+                "本章将聚焦萧炎与药老关系冲突，并回收旧线索真相。",
+                "CBN：萧炎进入试炼场",
                 "CPNs：",
-                "- 药师提醒规则异常",
-                "- 林越发现师徒分歧",
-                "CEN：林越决定暂缓冲突",
+                "- 药老提醒规则异常",
+                "- 萧炎发现师徒分歧",
+                "CEN：萧炎决定暂缓冲突",
                 "必须覆盖节点：发现规则异常",
                 "本章禁区：不可提前摊牌",
             ]
@@ -777,7 +777,7 @@ def test_ainovel_skill_flow_runs_story_contract_context_and_review_pipeline_with
                 {
                     "chapter": 2,
                     "scene_index": 1,
-                    "content": "林越与药师关系紧张，线索逐步浮现，冲突升级。",
+                    "content": "萧炎与药老关系紧张，线索逐步浮现，冲突升级。",
                 }
             ]
         )

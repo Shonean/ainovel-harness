@@ -121,14 +121,19 @@ export function registerProject(projectRoot) {
     return postJSON('/api/project/register', { project_root: projectRoot })
 }
 
-export function createProject(name, brief, referenceTextPath, model, testBook = false) {
+export function createProject(name, brief, referenceTextPath, model, testBook = false, bookMode = 'premium') {
     return postJSON('/api/project/create', {
         name,
         brief: brief || {},
         reference_text_path: referenceTextPath || null,
         model: model || null,
         test_book: testBook,
+        book_mode: bookMode,
     })
+}
+
+export function switchBookMode(projectRoot, mode) {
+    return postJSON('/api/project/mode', { project_root: projectRoot, mode })
 }
 
 export function fetchStoryRuntimeHealth() {
@@ -734,6 +739,54 @@ export function phAiInit({ book_root, brief, title = '', genre = '', settings = 
     })
 }
 
+// 量产快速初始化：表单 → 基本设定 + 元素卡（待审，不自动批准）；返回 { task_id }
+export function phAiInitQuick(book_root, { title, genre = '', protagonist = '', style = '', one_liner = '', target_chapters = 0 }) {
+    return phRequest('/ai-creation/init/quick', {
+        method: 'POST',
+        body: JSON.stringify({ book_root, title, genre, protagonist, style, one_liner, target_chapters }),
+    })
+}
+
+// ── 量产路线图（roadmap：幕/弧卡/伏笔/冻结）────────────────────
+export function phAiRoadmapGet(book_root) {
+    return phRequest(`/ai-creation/roadmap?book_root=${encodeURIComponent(book_root)}`)
+}
+
+export function phAiRoadmapGenerate(book_root, { target_chapters = 30, n_chapters_per_arc = 3, brief = '' } = {}) {
+    return phRequest('/ai-creation/roadmap/generate', {
+        method: 'POST',
+        body: JSON.stringify({ book_root, target_chapters, n_chapters_per_arc, brief }),
+    })
+}
+
+export function phAiRoadmapSave(book_root, roadmap) {
+    return phRequest('/ai-creation/roadmap', {
+        method: 'PUT',
+        body: JSON.stringify({ book_root, roadmap }),
+    })
+}
+
+export function phAiRoadmapFreeze(book_root, force = false) {
+    return phRequest('/ai-creation/roadmap/freeze', {
+        method: 'POST',
+        body: JSON.stringify({ book_root, force }),
+    })
+}
+
+export function phAiRoadmapCardRegenerate(book_root, arc_id, instruction = '') {
+    return phRequest('/ai-creation/roadmap/card/regenerate', {
+        method: 'POST',
+        body: JSON.stringify({ book_root, arc_id, instruction }),
+    })
+}
+
+export function phAiRoadmapContinue(book_root, count = 1) {
+    return phRequest('/ai-creation/roadmap/continue', {
+        method: 'POST',
+        body: JSON.stringify({ book_root, count }),
+    })
+}
+
 export function phAiSettingsGet(book_root) {
     return phRequest(`/ai-creation/settings?book_root=${encodeURIComponent(book_root)}`)
 }
@@ -828,6 +881,13 @@ export function phAiChatSessionsSave(book_root, sessions) {
     return phRequest('/ai-creation/chat-sessions', {
         method: 'POST',
         body: JSON.stringify({ book_root, sessions }),
+    })
+}
+
+// 【Phase 3】删除一整段会话（含其全部消息）
+export function phAiChatSessionsDelete(book_root, session_id) {
+    return phRequest(`/ai-creation/chat-sessions/${encodeURIComponent(session_id)}?book_root=${encodeURIComponent(book_root)}`, {
+        method: 'DELETE',
     })
 }
 
@@ -1001,10 +1061,64 @@ export function phAiArcModify(book_root, arc_id, level, instruction) {
     })
 }
 
-export function phAiArcChat(book_root, arc_id, messages, web_search = false, access = null, sel_access = null, mode = 'normal') {
+// 【Phase 3】session_id：工作记忆按会话隔离注入（单对话层记忆）
+export function phAiArcChat(book_root, arc_id, messages, web_search = false, access = null, sel_access = null, mode = 'normal', session_id = '') {
     return phRequest('/ai-creation/arc/chat', {
         method: 'POST',
-        body: JSON.stringify({ book_root, arc_id, messages, web_search, access, sel_access, mode }),
+        body: JSON.stringify({ book_root, arc_id, messages, web_search, access, sel_access, mode, session_id }),
+    })
+}
+
+// 【Phase 4】SSE 流式对话：POST + ReadableStream 手工解析（createReconnectingSSE 是 GET 语义，不适用）。
+// handlers: {onToken(text), onToolCall(event), onPendingProposal(proposal), onDone(result), onError(msg)}
+// 返回 Promise<{ok:true, result}|{ok:false, error}>，resolve 即流结束；REST 兜底由调用方处理。
+export function phAiArcChatStream(book_root, arc_id, messages, handlers = {}, opts = {}) {
+    return new Promise(resolve => {
+        ;(async () => {
+            try {
+                const res = await fetch(`${BASE}/api/prompt-harness/ai-creation/arc/chat/stream`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        book_root, arc_id, messages,
+                        web_search: !!opts.web_search, access: opts.access ?? null,
+                        sel_access: opts.sel_access ?? null, mode: opts.mode || 'normal',
+                        session_id: opts.session_id || '',
+                    }),
+                })
+                if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+                const reader = res.body.getReader()
+                const dec = new TextDecoder()
+                let buf = ''
+                for (;;) {
+                    const { done, value } = await reader.read()
+                    if (done) break
+                    buf += dec.decode(value, { stream: true })
+                    let idx
+                    while ((idx = buf.indexOf('\n\n')) >= 0) {
+                        const chunk = buf.slice(0, idx)
+                        buf = buf.slice(idx + 2)
+                        const line = chunk.split('\n').find(l => l.startsWith('data:'))
+                        if (!line) continue
+                        let ev
+                        try { ev = JSON.parse(line.slice(5).trim()) } catch { continue }
+                        if (ev.type === 'token') handlers.onToken?.(ev.text || '')
+                        else if (ev.type === 'tool_call') handlers.onToolCall?.(ev.event)
+                        else if (ev.type === 'pending_proposal') handlers.onPendingProposal?.(ev.proposal)
+                        else if (ev.type === 'done') {
+                            handlers.onDone?.(ev.result)
+                            resolve({ ok: true, result: ev.result })
+                            return
+                        } else if (ev.type === 'error') throw new Error(ev.error || '流式对话失败')
+                    }
+                }
+                // 流关闭但没收到 done → 视为异常（调用方落回 REST）
+                throw new Error('流式连接中断（未收到 done）')
+            } catch (e) {
+                handlers.onError?.(e.message || String(e))
+                resolve({ ok: false, error: e.message || String(e) })
+            }
+        })()
     })
 }
 
@@ -1014,10 +1128,10 @@ export function phAiInitStatus(book_root) {
 }
 
 // 用户同意后执行创作助手提案的动作（工具真执行）
-export function phAiArcChatApply(book_root, arc_id, tool, args = {}) {
+export function phAiArcChatApply(book_root, arc_id, tool, args = {}, session_id = '') {
     return phRequest('/ai-creation/arc/chat/apply', {
         method: 'POST',
-        body: JSON.stringify({ book_root, arc_id, tool, args }),
+        body: JSON.stringify({ book_root, arc_id, tool, args, session_id }),
     })
 }
 
@@ -1028,6 +1142,34 @@ export function phAiMemoryList(book_root, { scope = null, arc_id = '', key = '' 
     if (arc_id) url += `&arc_id=${encodeURIComponent(arc_id)}`
     if (key) url += `&key=${encodeURIComponent(key)}`
     return phRequest(url)
+}
+
+// ── 【Phase 3】D1 三级记忆面板 + 冲突卡处置 + 单对话工作记忆 ──────────
+export function phAiMemoryTiers(book_root, { arc_id = '', session_id = '' } = {}) {
+    const url = `/ai-creation/memory/tiers?book_root=${encodeURIComponent(book_root)}`
+        + `&arc_id=${encodeURIComponent(arc_id)}&session_id=${encodeURIComponent(session_id)}`
+    return phRequest(url)
+}
+
+// 处置未决冲突卡：action ∈ coexist_layered / version_rewrite / revert / add_slot
+export function phAiMemoryCardResolve(book_root, card_id, action, note = '', slot = '') {
+    return phRequest('/ai-creation/memory/card/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ book_root, card_id, action, note, slot }),
+    })
+}
+
+export function phAiMemoryWorkingAdd(book_root, session_id, text) {
+    return phRequest('/ai-creation/memory/session', {
+        method: 'POST',
+        body: JSON.stringify({ book_root, session_id, text }),
+    })
+}
+
+export function phAiMemoryWorkingDelete(book_root, session_id, key) {
+    return phRequest(`/ai-creation/memory/session/${encodeURIComponent(session_id)}?book_root=${encodeURIComponent(book_root)}&key=${encodeURIComponent(key)}`, {
+        method: 'DELETE',
+    })
 }
 
 // ── 写书讨论检索（六源联邦 + 可选 LLM 精排） ──────────────────────
@@ -1096,11 +1238,35 @@ export function phFragmentFinalize({ book_root, title = '', text, output }) {
 }
 
 // ── 融合模块：批量生成全书 + 任务状态轮询 + 导出 ──
-export function phAiBatchGenerate({ book_root, target_chapters, n_chapters_per_arc = 3, arc_briefs = null, select_all_elements = true }) {
+export function phAiBatchGenerate({ book_root, target_chapters, n_chapters_per_arc = 3, arc_briefs = null, select_all_elements = true, resume_run_id = null, model = null }) {
     return phRequest('/ai-creation/batch-generate', {
         method: 'POST', body: JSON.stringify({
             book_root, target_chapters, n_chapters_per_arc, arc_briefs, select_all_elements,
+            resume_run_id, model,
         }),
+    })
+}
+
+export function phAiRuns(book_root, kind = 'batch_generate', limit = 20) {
+    return phRequest('/ai-creation/runs', {
+        method: 'POST', body: JSON.stringify({ book_root, kind, limit }),
+    })
+}
+
+export function phAiRunDetail(book_root, run_id) {
+    return phRequest('/ai-creation/run-detail', {
+        method: 'POST', body: JSON.stringify({ book_root, run_id }),
+    })
+}
+
+// ── 量产补评（P5）──
+export function phAiDeferredCount(book_root) {
+    return phRequest(`/ai-creation/deferred-count?book_root=${encodeURIComponent(book_root)}`)
+}
+
+export function phAiRescoreDeferred(book_root, arc_id = '') {
+    return phRequest('/ai-creation/rescore-deferred', {
+        method: 'POST', body: JSON.stringify({ book_root, arc_id }),
     })
 }
 
@@ -1131,3 +1297,113 @@ export const phNotesPut = (data) =>
 // elements scope
 export const phElementsScope = (data) =>
     phRequest('/ai-creation/elements/scope', { method: 'PATCH', body: JSON.stringify(data) })
+
+// ── 改编中心（T35：主页三层入口 + 全局总览）──────
+
+export function fetchAdaptationOverview() {
+    return fetchJSON('/api/adaptation/overview')
+}
+
+export async function saveAdaptationBudget(cfg) {
+    const res = await fetch(`${BASE}/api/adaptation/budget`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg),
+    })
+    return normalizeApiResponse(await res.json().catch(() => null))
+}
+
+// ── 改编 Pack（T35：书级改编页签；端点见 prompt-harness server.py §改编层 v0）──────
+
+export const phAdaptBuild = (bookRoot, arcIds, endingCount = 2) =>
+    phRequest('/ai-creation/adaptation/build', {
+        method: 'POST',
+        body: JSON.stringify({ book_root: bookRoot, arc_ids: arcIds, ending_count: endingCount }),
+    })
+
+export const phAdaptPacks = (bookRoot) =>
+    phRequest('/ai-creation/adaptation/packs', {
+        method: 'POST',
+        body: JSON.stringify({ book_root: bookRoot }),
+    })
+
+export const phAdaptPack = (bookRoot, packId, include = []) =>
+    phRequest('/ai-creation/adaptation/pack', {
+        method: 'POST',
+        body: JSON.stringify({ book_root: bookRoot, pack_id: packId, include }),
+    })
+
+export const phAdaptPackDelete = (bookRoot, packId) =>
+    phRequest('/ai-creation/adaptation/pack/delete', {
+        method: 'POST',
+        body: JSON.stringify({ book_root: bookRoot, pack_id: packId }),
+    })
+
+export const phAdaptPreviewUrl = (bookRoot, packId) =>
+    `${BASE}/api/prompt-harness/ai-creation/adaptation/preview?book_root=${encodeURIComponent(bookRoot)}&pack_id=${encodeURIComponent(packId)}`
+
+// ── 漫剧线收口（T36）：drama 域 ──────
+
+export const phDramaWorkbench = (bookRoot, packId) =>
+    phRequest('/ai-creation/drama/workbench', {
+        method: 'POST', body: JSON.stringify({ book_root: bookRoot, pack_id: packId }),
+    })
+
+export const phDramaCompose = (bookRoot, packId, config = {}) =>
+    phRequest('/ai-creation/drama/compose', {
+        method: 'POST', body: JSON.stringify({ book_root: bookRoot, pack_id: packId, config }),
+    })
+
+export const phDramaKeyshot = (bookRoot, packId, action, index = 0) =>
+    phRequest('/ai-creation/drama/keyshot', {
+        method: 'POST', body: JSON.stringify({ book_root: bookRoot, pack_id: packId, action, index }),
+    })
+
+export const phDramaFilms = (bookRoot) =>
+    phRequest('/ai-creation/drama/films', {
+        method: 'POST', body: JSON.stringify({ book_root: bookRoot }),
+    })
+
+export const phDramaFilmExport = (bookRoot, packId) =>
+    phRequest('/ai-creation/drama/film/export', {
+        method: 'POST', body: JSON.stringify({ book_root: bookRoot, pack_id: packId }),
+    })
+
+export const phDramaCompilation = (bookRoot, action, extra = {}) =>
+    phRequest('/ai-creation/drama/compilation', {
+        method: 'POST', body: JSON.stringify({ book_root: bookRoot, action, ...extra }),
+    })
+
+export const phDramaPublish = (bookRoot, packId, action, extra = {}) =>
+    phRequest('/ai-creation/drama/publish', {
+        method: 'POST', body: JSON.stringify({ book_root: bookRoot, pack_id: packId, action, ...extra }),
+    })
+
+export const phDramaBatch = (bookRoot, action) =>
+    phRequest('/ai-creation/drama/batch', {
+        method: 'POST', body: JSON.stringify({ book_root: bookRoot, action }),
+    })
+
+// ── 漫剧线收口（T36）：ark 控制台 ──────
+
+export const phArk = (action, payload = {}, taskId = '') =>
+    phRequest('/ai-creation/ark', {
+        method: 'POST', body: JSON.stringify({ action, payload, task_id: taskId }),
+    })
+
+export const phArkChat = (message, history = []) =>
+    phRequest('/ai-creation/ark/chat', {
+        method: 'POST', body: JSON.stringify({ message, history }),
+    })
+
+export const phTasks = () => phRequest('/tasks')
+
+// 成片管理跨书汇总（dashboard 8765 直连）
+export function fetchAdaptationFilms() {
+    return fetchJSON('/api/adaptation/films')
+}
+
+/** 漫剧媒体 URL：pack 内白名单文件，或 name='films/<文件名>' 取导出产物。 */
+export function dramaMediaUrl(bookRoot, packId, name) {
+    return `${BASE}/api/prompt-harness/ai-creation/drama/media?book_root=${encodeURIComponent(bookRoot)}&pack_id=${encodeURIComponent(packId || '')}&name=${encodeURIComponent(name)}`
+}

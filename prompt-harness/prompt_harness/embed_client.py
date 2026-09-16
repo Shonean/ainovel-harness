@@ -260,6 +260,10 @@ async def get_embeddings(
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        # 嵌入服务商升维等模型变更导致新旧向量维度不匹配：按 0 分降级，
+        # 不让单条比较的 numpy 异常炸掉整次请求（调用方按需触发索引重建）。
+        return 0.0
     import numpy as np
 
     a_vec = _normalize(np.array(a, dtype=np.float32))

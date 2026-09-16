@@ -63,9 +63,9 @@ class TestEntityLinker:
         # 先注册实体，否则 aliases JOIN 不会返回
         IndexManager(temp_project).upsert_entity(
             EntityMeta(
-                id="linyue",
+                id="xiaoyan",
                 type="角色",
-                canonical_name="林越",
+                canonical_name="萧炎",
                 current={},
                 first_appearance=1,
                 last_appearance=1,
@@ -73,12 +73,12 @@ class TestEntityLinker:
         )
 
         # canonical_name 会在实体写入时自动注册为别名
-        assert linker.lookup_alias("林越") == "linyue"
-        assert linker.register_alias("linyue", "小炎子")
+        assert linker.lookup_alias("萧炎") == "xiaoyan"
+        assert linker.register_alias("xiaoyan", "小炎子")
 
         # 查找
-        assert linker.lookup_alias("林越") == "linyue"
-        assert linker.lookup_alias("小炎子") == "linyue"
+        assert linker.lookup_alias("萧炎") == "xiaoyan"
+        assert linker.lookup_alias("小炎子") == "xiaoyan"
         assert linker.lookup_alias("不存在") is None
 
     def test_alias_one_to_many(self, temp_project):
@@ -88,9 +88,9 @@ class TestEntityLinker:
         idx = IndexManager(temp_project)
         idx.upsert_entity(
             EntityMeta(
-                id="linyue",
+                id="xiaoyan",
                 type="角色",
-                canonical_name="林越",
+                canonical_name="萧炎",
                 current={},
                 first_appearance=1,
                 last_appearance=1,
@@ -100,7 +100,7 @@ class TestEntityLinker:
             EntityMeta(
                 id="other_person",
                 type="角色",
-                canonical_name="林越",
+                canonical_name="萧炎",
                 current={},
                 first_appearance=1,
                 last_appearance=1,
@@ -110,29 +110,29 @@ class TestEntityLinker:
         # canonical_name 会自动作为别名；同一别名可绑定不同实体（一对多）
 
         # 查找所有匹配
-        entries = linker.lookup_alias_all("林越")
+        entries = linker.lookup_alias_all("萧炎")
         assert len(entries) == 2
 
     def test_get_all_aliases(self, temp_project):
         linker = EntityLinker(temp_project)
         IndexManager(temp_project).upsert_entity(
             EntityMeta(
-                id="linyue",
+                id="xiaoyan",
                 type="角色",
-                canonical_name="林越",
+                canonical_name="萧炎",
                 current={},
                 first_appearance=1,
                 last_appearance=1,
             )
         )
 
-        linker.register_alias("linyue", "林越")
-        linker.register_alias("linyue", "小炎子")
-        linker.register_alias("linyue", "炎哥")
+        linker.register_alias("xiaoyan", "萧炎")
+        linker.register_alias("xiaoyan", "小炎子")
+        linker.register_alias("xiaoyan", "炎哥")
 
-        aliases = linker.get_all_aliases("linyue")
+        aliases = linker.get_all_aliases("xiaoyan")
         assert len(aliases) == 3
-        assert "林越" in aliases
+        assert "萧炎" in aliases
 
     def test_confidence_evaluation(self, temp_project):
         linker = EntityLinker(temp_project)
@@ -159,13 +159,13 @@ class TestEntityLinker:
 
         result = linker.process_uncertain(
             mention="那位前辈",
-            candidates=["laoyaoshi", "elder_zhang"],
-            suggested="laoyaoshi",
+            candidates=["yaolao", "elder_zhang"],
+            suggested="yaolao",
             confidence=0.7
         )
 
         assert result.mention == "那位前辈"
-        assert result.entity_id == "laoyaoshi"
+        assert result.entity_id == "yaolao"
         assert result.adopted is True
         assert result.warning is not None
 
@@ -177,61 +177,61 @@ class TestStateManager:
         manager = StateManager(temp_project)
 
         entity = EntityState(
-            id="linyue",
-            name="林越",
+            id="xiaoyan",
+            name="萧炎",
             type="角色",
             tier="核心"
         )
         assert manager.add_entity(entity)
 
         # 获取实体
-        result = manager.get_entity("linyue")
+        result = manager.get_entity("xiaoyan")
         assert result is not None
-        assert result["canonical_name"] == "林越"
+        assert result["canonical_name"] == "萧炎"
 
     def test_update_entity(self, temp_project):
         manager = StateManager(temp_project)
 
-        entity = EntityState(id="linyue", name="林越", type="角色")
+        entity = EntityState(id="xiaoyan", name="萧炎", type="角色")
         manager.add_entity(entity)
 
         # 更新属性 (v5.0: attributes 存在 current 字段)
-        manager.update_entity("linyue", {"current": {"realm": "武师"}})
+        manager.update_entity("xiaoyan", {"current": {"realm": "斗师"}})
 
-        result = manager.get_entity("linyue")
-        assert result["current"]["realm"] == "武师"
+        result = manager.get_entity("xiaoyan")
+        assert result["current"]["realm"] == "斗师"
 
     def test_record_state_change(self, temp_project):
         manager = StateManager(temp_project)
 
-        entity = EntityState(id="linyue", name="林越", type="角色")
+        entity = EntityState(id="xiaoyan", name="萧炎", type="角色")
         manager.add_entity(entity)
 
         manager.record_state_change(
-            entity_id="linyue",
+            entity_id="xiaoyan",
             field="realm",
-            old_value="武者",
-            new_value="武师",
+            old_value="斗者",
+            new_value="斗师",
             reason="突破",
             chapter=100
         )
 
-        changes = manager.get_state_changes("linyue")
+        changes = manager.get_state_changes("xiaoyan")
         assert len(changes) == 1
-        assert changes[0]["new_value"] == "武师"
+        assert changes[0]["new_value"] == "斗师"
 
     def test_add_relationship(self, temp_project):
         manager = StateManager(temp_project)
 
         manager.add_relationship(
-            from_entity="linyue",
-            to_entity="laoyaoshi",
+            from_entity="xiaoyan",
+            to_entity="yaolao",
             rel_type="师徒",
-            description="药师收林越为徒",
+            description="药老收萧炎为徒",
             chapter=10
         )
 
-        rels = manager.get_relationships("linyue")
+        rels = manager.get_relationships("xiaoyan")
         assert len(rels) == 1
         assert rels[0]["type"] == "师徒"
 
@@ -240,21 +240,21 @@ class TestStateManager:
 
         result = {
             "entities_appeared": [
-                {"id": "linyue", "mentions": ["林越", "他"]}
+                {"id": "xiaoyan", "mentions": ["萧炎", "他"]}
             ],
             "entities_new": [
                 {"suggested_id": "hongyi_girl", "name": "红衣女子", "type": "角色", "tier": "装饰"}
             ],
             "state_changes": [
-                {"entity_id": "linyue", "field": "realm", "old": "武者", "new": "武师", "reason": "突破"}
+                {"entity_id": "xiaoyan", "field": "realm", "old": "斗者", "new": "斗师", "reason": "突破"}
             ],
             "relationships_new": [
-                {"from": "linyue", "to": "hongyi_girl", "type": "相识", "description": "初次见面"}
+                {"from": "xiaoyan", "to": "hongyi_girl", "type": "相识", "description": "初次见面"}
             ]
         }
 
-        # 先添加林越
-        manager.add_entity(EntityState(id="linyue", name="林越", type="角色"))
+        # 先添加萧炎
+        manager.add_entity(EntityState(id="xiaoyan", name="萧炎", type="角色"))
 
         warnings = manager.process_chapter_result(100, result)
 
@@ -262,7 +262,7 @@ class TestStateManager:
         assert manager.get_entity("hongyi_girl") is not None
 
         # 验证状态变化
-        changes = manager.get_state_changes("linyue")
+        changes = manager.get_state_changes("xiaoyan")
         assert len(changes) == 1
 
         # 验证进度更新
@@ -299,7 +299,7 @@ class TestStateManager:
             "project_info": {"title": "测试书名", "genre": "修仙/玄幻", "created_at": "2026-01-01"},
             "progress": {"current_chapter": 10, "total_words": 1000, "last_updated": "2026-01-01 00:00:00"},
             "protagonist_state": {"name": "测试主角"},
-            "relationships": {"allies": ["药师"], "enemies": []},
+            "relationships": {"allies": ["药老"], "enemies": []},
             "world_settings": {"power_system": [], "factions": [], "locations": []},
             "plot_threads": {"active_threads": [{"id": "t1", "title": "主线"}], "foreshadowing": []},
             "review_checkpoints": [],
@@ -309,7 +309,7 @@ class TestStateManager:
         temp_project.state_file.write_text(json.dumps(init_state, ensure_ascii=False, indent=2), encoding="utf-8")
 
         manager = StateManager(temp_project)
-        manager.add_entity(EntityState(id="linyue", name="林越", type="角色", tier="核心"))
+        manager.add_entity(EntityState(id="xiaoyan", name="萧炎", type="角色", tier="核心"))
         manager.save_state()
 
         saved = json.loads(temp_project.state_file.read_text(encoding="utf-8"))
@@ -330,8 +330,8 @@ class TestStateManager:
                 {
                     "mention": "那位前辈",
                     "context": "那位前辈看了他一眼",
-                    "candidates": [{"type": "角色", "id": "laoyaoshi"}, {"type": "角色", "id": "elder_zhang"}],
-                    "suggested": "laoyaoshi",
+                    "candidates": [{"type": "角色", "id": "yaolao"}, {"type": "角色", "id": "elder_zhang"}],
+                    "suggested": "yaolao",
                     "confidence": 0.6,
                 },
                 {
@@ -357,7 +357,7 @@ class TestStateManager:
         warn = state["disambiguation_warnings"][0]
         assert warn.get("chapter") == 100
         assert warn.get("mention") == "那位前辈"
-        assert warn.get("chosen_id") == "laoyaoshi"
+        assert warn.get("chosen_id") == "yaolao"
 
         pending = state["disambiguation_pending"][0]
         assert pending.get("chapter") == 100
@@ -379,23 +379,23 @@ class TestIndexManager:
             title="突破",
             location="天云宗",
             word_count=3500,
-            characters=["linyue", "laoyaoshi"]
+            characters=["xiaoyan", "yaolao"]
         )
         manager.add_chapter(meta)
 
         result = manager.get_chapter(100)
         assert result is not None
         assert result["title"] == "突破"
-        assert "linyue" in result["characters"]
+        assert "xiaoyan" in result["characters"]
 
     def test_add_scenes(self, temp_project):
         manager = IndexManager(temp_project)
 
         scenes = [
             SceneMeta(chapter=100, scene_index=1, start_line=1, end_line=50,
-                     location="天云宗·闭关室", summary="林越闭关突破", characters=["linyue"]),
+                     location="天云宗·闭关室", summary="萧炎闭关突破", characters=["xiaoyan"]),
             SceneMeta(chapter=100, scene_index=2, start_line=51, end_line=100,
-                     location="天云宗·演武场", summary="展示实力", characters=["linyue", "lintian"])
+                     location="天云宗·演武场", summary="展示实力", characters=["xiaoyan", "lintian"])
         ]
         manager.add_scenes(100, scenes)
 
@@ -406,13 +406,13 @@ class TestIndexManager:
     def test_record_appearance(self, temp_project):
         manager = IndexManager(temp_project)
 
-        manager.record_appearance("linyue", 100, ["林越", "他"], 0.95)
-        manager.record_appearance("laoyaoshi", 100, ["药师"], 0.92)
+        manager.record_appearance("xiaoyan", 100, ["萧炎", "他"], 0.95)
+        manager.record_appearance("yaolao", 100, ["药老"], 0.92)
 
         appearances = manager.get_chapter_appearances(100)
         assert len(appearances) == 2
 
-        entity_history = manager.get_entity_appearances("linyue")
+        entity_history = manager.get_entity_appearances("xiaoyan")
         assert len(entity_history) == 1
 
     def test_search_scenes_by_location(self, temp_project):
@@ -435,9 +435,9 @@ class TestIndexManager:
 
         manager.upsert_entity(
             EntityMeta(
-                id="linyue",
+                id="xiaoyan",
                 type="角色",
-                canonical_name="林越",
+                canonical_name="萧炎",
                 current={},
                 first_appearance=1,
                 last_appearance=1,
@@ -446,7 +446,7 @@ class TestIndexManager:
         manager.add_chapter(ChapterMeta(chapter=1, title="", location="", word_count=1000, characters=[]))
         manager.add_scenes(1, [SceneMeta(chapter=1, scene_index=1, start_line=1, end_line=50,
                                         location="", summary="", characters=[])])
-        manager.record_appearance("linyue", 1, [], 1.0)
+        manager.record_appearance("xiaoyan", 1, [], 1.0)
 
         stats = manager.get_stats()
         assert stats["chapters"] == 1
@@ -476,20 +476,20 @@ class TestIndexManager:
         manager = IndexManager(temp_project)
 
         entity_main = EntityMeta(
-            id="linyue",
+            id="xiaoyan",
             type="角色",
-            canonical_name="林越",
+            canonical_name="萧炎",
             tier="核心",
             desc="主角",
-            current={"realm": "武者"},
+            current={"realm": "斗者"},
             first_appearance=1,
             last_appearance=1,
             is_protagonist=True,
         )
         entity_other = EntityMeta(
-            id="laoyaoshi",
+            id="yaolao",
             type="角色",
-            canonical_name="药师",
+            canonical_name="药老",
             tier="重要",
             current={},
             first_appearance=1,
@@ -500,9 +500,9 @@ class TestIndexManager:
         assert manager.upsert_entity(entity_other) is True
 
         # 更新 current
-        assert manager.update_entity_current("linyue", {"realm": "武师"}) is True
-        entity = manager.get_entity("linyue")
-        assert entity["current_json"]["realm"] == "武师"
+        assert manager.update_entity_current("xiaoyan", {"realm": "斗师"}) is True
+        entity = manager.get_entity("xiaoyan")
+        assert entity["current_json"]["realm"] == "斗师"
 
         # 元数据更新
         entity_main.desc = "主角（更新）"
@@ -510,30 +510,30 @@ class TestIndexManager:
         assert manager.upsert_entity(entity_main, update_metadata=True) is False
 
         # 别名管理
-        assert manager.register_alias("炎帝", "linyue", "角色")
-        assert "炎帝" in manager.get_entity_aliases("linyue")
-        assert manager.get_entities_by_alias("炎帝")[0]["id"] == "linyue"
-        assert manager.remove_alias("炎帝", "linyue")
+        assert manager.register_alias("炎帝", "xiaoyan", "角色")
+        assert "炎帝" in manager.get_entity_aliases("xiaoyan")
+        assert manager.get_entities_by_alias("炎帝")[0]["id"] == "xiaoyan"
+        assert manager.remove_alias("炎帝", "xiaoyan")
         assert manager.get_entities_by_alias("炎帝") == []
 
         # 类型/层级/核心/主角查询
         assert len(manager.get_entities_by_type("角色")) == 2
-        assert any(e["id"] == "linyue" for e in manager.get_entities_by_tier("核心"))
-        assert any(e["id"] == "linyue" for e in manager.get_core_entities())
-        assert manager.get_protagonist()["id"] == "linyue"
+        assert any(e["id"] == "xiaoyan" for e in manager.get_entities_by_tier("核心"))
+        assert any(e["id"] == "xiaoyan" for e in manager.get_core_entities())
+        assert manager.get_protagonist()["id"] == "xiaoyan"
 
         # 归档实体
-        assert manager.archive_entity("laoyaoshi") is True
-        assert all(e["id"] != "laoyaoshi" for e in manager.get_entities_by_type("角色"))
+        assert manager.archive_entity("yaolao") is True
+        assert all(e["id"] != "yaolao" for e in manager.get_entities_by_type("角色"))
         assert any(
-            e["id"] == "laoyaoshi"
+            e["id"] == "yaolao"
             for e in manager.get_entities_by_type("角色", include_archived=True)
         )
 
         # 关系管理（新建 + 更新）
         rel = RelationshipMeta(
-            from_entity="linyue",
-            to_entity="laoyaoshi",
+            from_entity="xiaoyan",
+            to_entity="yaolao",
             type="师徒",
             description="收徒",
             chapter=1,
@@ -543,19 +543,19 @@ class TestIndexManager:
         rel.chapter = 2
         assert manager.upsert_relationship(rel) is False
 
-        assert len(manager.get_entity_relationships("linyue", "from")) == 1
-        assert len(manager.get_entity_relationships("laoyaoshi", "to")) == 1
-        assert len(manager.get_entity_relationships("linyue", "both")) >= 1
-        assert len(manager.get_relationship_between("linyue", "laoyaoshi")) == 1
+        assert len(manager.get_entity_relationships("xiaoyan", "from")) == 1
+        assert len(manager.get_entity_relationships("yaolao", "to")) == 1
+        assert len(manager.get_entity_relationships("xiaoyan", "both")) >= 1
+        assert len(manager.get_relationship_between("xiaoyan", "yaolao")) == 1
         assert len(manager.get_recent_relationships(limit=5)) >= 1
 
     def test_state_changes_and_appearances(self, temp_project):
         manager = IndexManager(temp_project)
 
         entity = EntityMeta(
-            id="linyue",
+            id="xiaoyan",
             type="角色",
-            canonical_name="林越",
+            canonical_name="萧炎",
             current={},
             first_appearance=1,
             last_appearance=1,
@@ -563,26 +563,26 @@ class TestIndexManager:
         manager.upsert_entity(entity)
 
         change = StateChangeMeta(
-            entity_id="linyue",
+            entity_id="xiaoyan",
             field="realm",
-            old_value="武者",
-            new_value="武师",
+            old_value="斗者",
+            new_value="斗师",
             reason="突破",
             chapter=2,
         )
         change_id = manager.record_state_change(change)
         assert change_id > 0
 
-        assert len(manager.get_entity_state_changes("linyue")) == 1
+        assert len(manager.get_entity_state_changes("xiaoyan")) == 1
         assert len(manager.get_recent_state_changes(limit=5)) == 1
         assert len(manager.get_chapter_state_changes(2)) == 1
 
         # 出场记录（含 skip_if_exists 分支）
-        manager.record_appearance("linyue", 2, ["林越"], 1.0)
-        manager.record_appearance("linyue", 2, ["林越"], 1.0, skip_if_exists=True)
-        manager.record_appearance("linyue", 3, ["林越"], 1.0)
+        manager.record_appearance("xiaoyan", 2, ["萧炎"], 1.0)
+        manager.record_appearance("xiaoyan", 2, ["萧炎"], 1.0, skip_if_exists=True)
+        manager.record_appearance("xiaoyan", 3, ["萧炎"], 1.0)
 
-        assert len(manager.get_entity_appearances("linyue")) == 2
+        assert len(manager.get_entity_appearances("xiaoyan")) == 2
         assert len(manager.get_recent_appearances(limit=5)) >= 1
         assert len(manager.get_chapter_appearances(2)) == 1
 
@@ -595,7 +595,7 @@ class TestIndexManager:
                 title="起点",
                 location="天云宗",
                 word_count=1000,
-                characters=["linyue"],
+                characters=["xiaoyan"],
             )
         )
         manager.add_chapter(
@@ -604,7 +604,7 @@ class TestIndexManager:
                 title="突破",
                 location="天云宗",
                 word_count=1200,
-                characters=["linyue", "laoyaoshi"],
+                characters=["xiaoyan", "yaolao"],
             )
         )
 
@@ -619,7 +619,7 @@ class TestIndexManager:
                 end_line=50,
                 location="天云宗·闭关室",
                 summary="闭关",
-                characters=["linyue"],
+                characters=["xiaoyan"],
             ),
             SceneMeta(
                 chapter=1,
@@ -628,7 +628,7 @@ class TestIndexManager:
                 end_line=80,
                 location="天云宗·演武场",
                 summary="练习",
-                characters=["linyue"],
+                characters=["xiaoyan"],
             ),
         ]
         manager.add_scenes(1, scenes)
@@ -642,8 +642,8 @@ class TestIndexManager:
             title="试炼",
             location="秘境",
             word_count=1500,
-            entities=[{"id": "linyue", "type": "角色", "mentions": ["林越"]}],
-            scenes=[{"index": 1, "start_line": 1, "end_line": 20, "location": "秘境", "summary": "开场", "characters": ["linyue"]}],
+            entities=[{"id": "xiaoyan", "type": "角色", "mentions": ["萧炎"]}],
+            scenes=[{"index": 1, "start_line": 1, "end_line": 20, "location": "秘境", "summary": "开场", "characters": ["xiaoyan"]}],
         )
         assert stats["chapters"] == 1
         assert stats["scenes"] == 1
@@ -981,11 +981,11 @@ class TestIndexManager:
         # 基础数据
         manager.upsert_entity(
             EntityMeta(
-                id="linyue",
+                id="xiaoyan",
                 type="角色",
-                canonical_name="林越",
+                canonical_name="萧炎",
                 tier="核心",
-                current={"realm": "武者"},
+                current={"realm": "斗者"},
                 first_appearance=1,
                 last_appearance=1,
                 is_protagonist=True,
@@ -993,9 +993,9 @@ class TestIndexManager:
         )
         manager.upsert_entity(
             EntityMeta(
-                id="laoyaoshi",
+                id="yaolao",
                 type="角色",
-                canonical_name="药师",
+                canonical_name="药老",
                 tier="重要",
                 current={},
                 first_appearance=1,
@@ -1003,14 +1003,14 @@ class TestIndexManager:
             )
         )
 
-        manager.register_alias("炎帝", "linyue", "角色")
+        manager.register_alias("炎帝", "xiaoyan", "角色")
         manager.add_chapter(
             ChapterMeta(
                 chapter=1,
                 title="起点",
                 location="天云宗",
                 word_count=1000,
-                characters=["linyue"],
+                characters=["xiaoyan"],
             )
         )
         manager.add_scenes(
@@ -1023,25 +1023,25 @@ class TestIndexManager:
                     end_line=20,
                     location="天云宗·闭关室",
                     summary="闭关",
-                    characters=["linyue"],
+                    characters=["xiaoyan"],
                 )
             ],
         )
-        manager.record_appearance("linyue", 1, ["林越"], 1.0)
+        manager.record_appearance("xiaoyan", 1, ["萧炎"], 1.0)
         manager.record_state_change(
             StateChangeMeta(
-                entity_id="linyue",
+                entity_id="xiaoyan",
                 field="realm",
-                old_value="武者",
-                new_value="武师",
+                old_value="斗者",
+                new_value="斗师",
                 reason="突破",
                 chapter=1,
             )
         )
         manager.upsert_relationship(
             RelationshipMeta(
-                from_entity="linyue",
-                to_entity="laoyaoshi",
+                from_entity="xiaoyan",
+                to_entity="yaolao",
                 type="师徒",
                 description="收徒",
                 chapter=1,
@@ -1094,7 +1094,7 @@ class TestIndexManager:
         run_cli(["--project-root", root, "get-chapter", "--chapter", "1"])
         run_cli(["--project-root", root, "get-chapter", "--chapter", "99"])
         run_cli(["--project-root", root, "recent-appearances", "--limit", "5"])
-        run_cli(["--project-root", root, "entity-appearances", "--entity", "linyue", "--limit", "5"])
+        run_cli(["--project-root", root, "entity-appearances", "--entity", "xiaoyan", "--limit", "5"])
         run_cli(["--project-root", root, "search-scenes", "--location", "天云宗", "--limit", "5"])
 
         # 处理章节
@@ -1112,7 +1112,7 @@ class TestIndexManager:
                 "--word-count",
                 "1200",
                 "--entities",
-                json.dumps([{"id": "linyue", "mentions": ["林越"]}], ensure_ascii=False),
+                json.dumps([{"id": "xiaoyan", "mentions": ["萧炎"]}], ensure_ascii=False),
                 "--scenes",
                 json.dumps(
                     [
@@ -1122,7 +1122,7 @@ class TestIndexManager:
                             "end_line": 10,
                             "location": "秘境",
                             "summary": "开场",
-                            "characters": ["linyue"],
+                            "characters": ["xiaoyan"],
                         }
                     ],
                     ensure_ascii=False,
@@ -1131,7 +1131,7 @@ class TestIndexManager:
         )
 
         # v5.1 命令
-        run_cli(["--project-root", root, "get-entity", "--id", "linyue"])
+        run_cli(["--project-root", root, "get-entity", "--id", "xiaoyan"])
         run_cli(["--project-root", root, "get-entity", "--id", "missing"])
         run_cli(["--project-root", root, "get-core-entities"])
         run_cli(["--project-root", root, "get-protagonist"])
@@ -1140,10 +1140,10 @@ class TestIndexManager:
         )
         run_cli(["--project-root", root, "get-by-alias", "--alias", "炎帝"])
         run_cli(["--project-root", root, "get-by-alias", "--alias", "不存在"])
-        run_cli(["--project-root", root, "get-aliases", "--entity", "linyue"])
-        run_cli(["--project-root", root, "register-alias", "--alias", "炎哥", "--entity", "linyue", "--type", "角色"])
-        run_cli(["--project-root", root, "get-relationships", "--entity", "linyue", "--direction", "from"])
-        run_cli(["--project-root", root, "get-state-changes", "--entity", "linyue", "--limit", "20"])
+        run_cli(["--project-root", root, "get-aliases", "--entity", "xiaoyan"])
+        run_cli(["--project-root", root, "register-alias", "--alias", "炎哥", "--entity", "xiaoyan", "--type", "角色"])
+        run_cli(["--project-root", root, "get-relationships", "--entity", "xiaoyan", "--direction", "from"])
+        run_cli(["--project-root", root, "get-state-changes", "--entity", "xiaoyan", "--limit", "20"])
         run_cli(
             [
                 "--project-root",
@@ -1156,7 +1156,7 @@ class TestIndexManager:
                         "type": "角色",
                         "canonical_name": "林天",
                         "tier": "装饰",
-                        "current": {"realm": "武者"},
+                        "current": {"realm": "斗者"},
                     },
                     ensure_ascii=False,
                 ),
@@ -1170,7 +1170,7 @@ class TestIndexManager:
                 "--data",
                 json.dumps(
                     {
-                        "from_entity": "linyue",
+                        "from_entity": "xiaoyan",
                         "to_entity": "lintian",
                         "type": "相识",
                         "description": "初见",
@@ -1188,10 +1188,10 @@ class TestIndexManager:
                 "--data",
                 json.dumps(
                     {
-                        "entity_id": "linyue",
+                        "entity_id": "xiaoyan",
                         "field": "realm",
-                        "old_value": "武者",
-                        "new_value": "武师",
+                        "old_value": "斗者",
+                        "new_value": "斗师",
                         "reason": "突破",
                         "chapter": 2,
                     },
@@ -1349,7 +1349,7 @@ class TestStyleSampler:
             id="ch100_s1",
             chapter=100,
             scene_type="战斗",
-            content="林越一拳轰出...",
+            content="萧炎一拳轰出...",
             score=0.85,
             tags=["战斗", "激烈"]
         )
@@ -1363,7 +1363,7 @@ class TestStyleSampler:
         sampler = StyleSampler(temp_project)
 
         scenes = [
-            {"index": 1, "summary": "战斗场景", "content": "林越一拳轰出，斗气如虹，直接将对手击退三丈，周围的空气都被震得嗡嗡作响..." + "a" * 200}
+            {"index": 1, "summary": "战斗场景", "content": "萧炎一拳轰出，斗气如虹，直接将对手击退三丈，周围的空气都被震得嗡嗡作响..." + "a" * 200}
         ]
 
         # 低分不提取
@@ -1496,29 +1496,29 @@ class TestRAGAdapter:
             cursor.execute("""
                 INSERT INTO vectors (chunk_id, chapter, scene_index, content, embedding)
                 VALUES (?, ?, ?, ?, ?)
-            """, ("ch1_s1", 1, 1, "林越在天云宗修炼斗气", b""))
+            """, ("ch1_s1", 1, 1, "萧炎在天云宗修炼斗气", b""))
 
             cursor.execute("""
                 INSERT INTO vectors (chunk_id, chapter, scene_index, content, embedding)
                 VALUES (?, ?, ?, ?, ?)
-            """, ("ch1_s2", 1, 2, "药师传授炼药技巧", b""))
+            """, ("ch1_s2", 1, 2, "药老传授炼药技巧", b""))
 
             conn.commit()
 
             # 更新 BM25 索引
-            adapter._update_bm25_index(cursor, "ch1_s1", "林越在天云宗修炼斗气")
-            adapter._update_bm25_index(cursor, "ch1_s2", "药师传授炼药技巧")
+            adapter._update_bm25_index(cursor, "ch1_s1", "萧炎在天云宗修炼斗气")
+            adapter._update_bm25_index(cursor, "ch1_s2", "药老传授炼药技巧")
             conn.commit()
 
         # BM25 搜索
-        results = adapter.bm25_search("林越修炼", top_k=5)
+        results = adapter.bm25_search("萧炎修炼", top_k=5)
         assert len(results) >= 1
         assert results[0].chunk_id == "ch1_s1"
 
     def test_tokenize(self, temp_project):
         adapter = RAGAdapter(temp_project)
 
-        tokens = adapter._tokenize("林越hello世界world")
+        tokens = adapter._tokenize("萧炎hello世界world")
         assert "萧" in tokens
         assert "炎" in tokens
         assert "hello" in tokens

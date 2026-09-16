@@ -30,7 +30,7 @@ def test_build_memory_pack_filter_and_budget(tmp_path):
     cfg.memory_orchestrator_max_items = 1
     outline_dir = cfg.project_root / "大纲"
     outline_dir.mkdir(parents=True, exist_ok=True)
-    (outline_dir / "第1卷 详细大纲.md").write_text("### 第10章：林越突破\n", encoding="utf-8")
+    (outline_dir / "第1卷 详细大纲.md").write_text("### 第10章：萧炎突破\n", encoding="utf-8")
 
     store = ScratchpadManager(cfg)
     store.upsert_item(
@@ -38,9 +38,9 @@ def test_build_memory_pack_filter_and_budget(tmp_path):
             id="m1",
             layer="semantic",
             category="character_state",
-            subject="林越",
+            subject="萧炎",
             field="realm",
-            value="武师",
+            value="斗师",
             source_chapter=9,
         )
     )

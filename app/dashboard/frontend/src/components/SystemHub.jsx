@@ -127,7 +127,7 @@ export default function SystemHub({
                 <>
                     <div className="wb-sixsrc">
                         <div className="wb-srcrow"><span className="sdot ok"></span><span className="sn">本书索引</span><span className="sv">{finChapters.length} 章</span></div>
-                        <div className="wb-srcrow"><span className="sdot ok"></span><span className="sn">语料持久</span><span className="sv">语料 500 章</span></div>
+                        <div className="wb-srcrow"><span className="sdot ok"></span><span className="sn">语料持久</span><span className="sv">青山 500</span></div>
                         <div className="wb-srcrow"><span className="sdot ok"></span><span className="sn">模板库</span><span className="sv">已有</span></div>
                         <div className="wb-srcrow"><span className="sdot no"></span><span className="sn">CSV 数据</span><span className="sv">未配置</span></div>
                         <div className="wb-srcrow"><span className="sdot no"></span><span className="sn">参考文档</span><span className="sv">空</span></div>

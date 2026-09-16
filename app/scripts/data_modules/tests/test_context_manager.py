@@ -29,7 +29,7 @@ def temp_project(tmp_path):
 
 def test_context_manager_build_and_filter(temp_project):
     state = {
-        "protagonist_state": {"name": "林越", "location": {"current": "天云宗"}},
+        "protagonist_state": {"name": "萧炎", "location": {"current": "天云宗"}},
         "chapter_meta": {"0001": {"hook": "测试"}},
     }
     temp_project.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
@@ -41,9 +41,9 @@ def test_context_manager_build_and_filter(temp_project):
     idx = IndexManager(temp_project)
     idx.upsert_entity(
         EntityMeta(
-            id="linyue",
+            id="xiaoyan",
             type="角色",
-            canonical_name="林越",
+            canonical_name="萧炎",
             current={},
             first_appearance=1,
             last_appearance=1,
@@ -59,7 +59,7 @@ def test_context_manager_build_and_filter(temp_project):
             last_appearance=1,
         )
     )
-    idx.record_appearance("linyue", 1, ["林越"], 1.0)
+    idx.record_appearance("xiaoyan", 1, ["萧炎"], 1.0)
     idx.record_appearance("bad", 1, ["坏人"], 1.0)
     invalid_id = idx.mark_invalid_fact("entity", "bad", "错误")
     idx.resolve_invalid_fact(invalid_id, "confirm")
@@ -67,7 +67,7 @@ def test_context_manager_build_and_filter(temp_project):
     manager = ContextManager(temp_project)
     payload = manager.build_context(1)
     characters = payload["scene"]["appearing_characters"]
-    assert any(c.get("entity_id") == "linyue" for c in characters)
+    assert any(c.get("entity_id") == "xiaoyan" for c in characters)
     assert not any(c.get("entity_id") == "bad" for c in characters)
     assert payload["preferences"].get("tone") == "热血"
     assert "long_term_memory" in payload
@@ -118,7 +118,7 @@ def test_context_manager_uses_memory_orchestrator_for_working_when_enabled(temp_
 
 def test_context_manager_skips_memory_orchestrator_when_disabled(temp_project, monkeypatch):
     state = {
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
         "disambiguation_pending": [],
@@ -166,7 +166,7 @@ def test_context_manager_loads_volume_outline_file(temp_project):
 def test_context_manager_includes_story_contract_and_prewrite_validation(temp_project):
     state = {
         "progress": {"volumes_planned": [{"volume": 1, "chapters_range": "1-10"}]},
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [{"mention": "宗主"}],
         "disambiguation_pending": [],
@@ -363,7 +363,7 @@ def test_context_manager_exposes_latest_rejected_commit_not_last_accepted(temp_p
 
 def test_context_manager_blocks_when_story_contract_missing(temp_project):
     state = {
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
         "disambiguation_pending": [],
@@ -382,7 +382,7 @@ def test_query_router():
     router = QueryRouter()
     assert router.route("角色是谁") == "entity"
     assert router.route("发生了什么剧情") == "plot"
-    intent = router.route_intent("第10-20章林越和药师关系图谱")
+    intent = router.route_intent("第10-20章萧炎和药老关系图谱")
     assert intent["intent"] == "relationship"
     assert intent["needs_graph"] is True
     assert intent["time_scope"]["from_chapter"] == 10
@@ -395,7 +395,7 @@ def test_query_router():
 
 def test_context_manager_applies_ranker_and_contract_meta(temp_project):
     state = {
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {
             "0002": {"hook": "平稳"},
             "0003": {"hook": "留下悬念"},
@@ -424,7 +424,7 @@ def test_context_manager_applies_ranker_and_contract_meta(temp_project):
 def test_context_manager_includes_reader_signal_and_genre_profile(temp_project):
     state = {
         "project": {"genre": "xuanhuan"},
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
         "disambiguation_pending": [],
@@ -522,7 +522,7 @@ def test_context_manager_reader_signal_with_debt_and_disable_switch(temp_project
 def test_context_manager_includes_writing_guidance(temp_project):
     state = {
         "project": {"genre": "xuanhuan"},
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
         "disambiguation_pending": [],
@@ -601,7 +601,7 @@ def test_context_manager_dynamic_weights_and_composite_genre(temp_project):
 
     state = {
         "project": {"genre": "xuanhuan+realistic"},
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
         "disambiguation_pending": [],
@@ -748,7 +748,7 @@ def test_context_manager_enables_methodology_for_xianxia(temp_project):
 def test_context_manager_enables_methodology_for_non_xianxia_by_default(temp_project):
     state = {
         "project": {"genre": "xuanhuan"},
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
         "disambiguation_pending": [],
@@ -878,7 +878,7 @@ def test_context_manager_genre_profile_prefers_project_over_project_info(temp_pr
 def test_context_manager_includes_plot_structure_when_outline_has_nodes(temp_project):
     state = {
         "project": {"genre": "xuanhuan"},
-        "protagonist_state": {"name": "林越"},
+        "protagonist_state": {"name": "萧炎"},
         "chapter_meta": {},
         "disambiguation_warnings": [],
         "disambiguation_pending": [],

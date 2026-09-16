@@ -183,7 +183,7 @@ def _facts_block(facts: list[str]) -> str:
         return ""
     return (
         "【关键事实·不可变】以下事实必须原样保留在后续每一级展开与正文里："
-        "人物不得改名（如 王慧兰 不能写成 张兰），地点/物品/数字/事件不得丢失。\n"
+        "人物不得改名（如 王慧玲 不能写成 张兰），地点/物品/数字/事件不得丢失。\n"
         + "；".join(facts)
     )
 
@@ -232,6 +232,11 @@ def _prev_anchor_block(pa: str | None) -> str:
     if not pa:
         return ""
     return "【前文摘要（上一情节结局，本情节应承接其状态）】\n" + pa
+
+
+def _roadmap_block_from_state(state: dict[str, Any]) -> str:
+    """【T32 P4】量产路线图方向块（ai_creation 注入 state.roadmap_block，仅 l2 生效）。"""
+    return str((state or {}).get("roadmap_block") or "").strip()
 
 
 def _fields_block(field_values: dict[str, Any] | None) -> str:
@@ -467,6 +472,7 @@ async def step_ladder(state: dict[str, Any]) -> dict[str, Any]:
     eb = _element_block_from_state(state)                  # 【AI创作】元素白名单（l3起）
     cb = _constraints_block_from_state(state)              # 【AI创作】硬约束（l3起）
     pa = _prev_anchor_block(state.get("prev_anchor"))      # 【AI创作】前文摘要（l2/l3）
+    rb = _roadmap_block_from_state(state)                  # 【T32 P4】路线图方向（仅 l2）
 
     # 命中模板 → 注入该级格式参考 + 策略
     from .plot_library import strategy_overrides, template_format_block
@@ -491,6 +497,7 @@ async def step_ladder(state: dict[str, Any]) -> dict[str, Any]:
             + (("\n" + fvb) if fvb else "")
             + (("\n" + tb) if tb else "")
             + (("\n" + pa) if pa else "")
+            + (("\n\n" + rb) if rb else "")
             + (("\n\n" + _ladder_invariant_block("l2")) if _ladder_invariant_block("l2") else "")
             + (trend_note if trend_note else "")
             + "\n\n严格输出如下 JSON（不要 Markdown 代码块）：\n"

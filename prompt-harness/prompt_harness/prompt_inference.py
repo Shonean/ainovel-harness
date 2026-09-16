@@ -448,11 +448,11 @@ def render_prompt(
     lines.append("")
     lines.append("【连载约束——必须遵守】")
     lines.append("1. 开头：直接进入场景或事件，不要做氛围渲染、世界观介绍、角色出场铺垫。")
-    lines.append("   正确示范：「“你迟到了。”林川推开铁门，雨声灌了进来。」")
+    lines.append("   正确示范：「“你迟到了。”陈迹推开铁门，雨声灌了进来。」")
     lines.append("   错误示范：「夜幕低垂，古老的城墙在月色下泛着青灰色的光…」")
     lines.append("2. 结尾：情节推进到当前节点即止——停在动作、反应或对话上。不要总结、不要升华、不要抒情收束、不要刻意留悬念钩子。")
-    lines.append("   正确示范：「林川把杯子搁下。门外脚步声远了。」")
-    lines.append("   错误示范：「林川没回头。他知道身后的脚步声会一直跟着他走进六楼。」")
+    lines.append("   正确示范：「陈迹把杯子搁下。门外脚步声远了。」")
+    lines.append("   错误示范：「陈迹没回头。他知道身后的脚步声会一直跟着他走进六楼。」")
     lines.append("   错误示范：「这一夜，他终于明白了人生的真谛…」")
     lines.append("3. 全文：本章是长篇小说连载的一部分，不是独立短篇。")
     lines.append("   每个场景都应当假设读者已经认识人物、了解背景。")
@@ -1299,7 +1299,7 @@ def _output_per_chapter(p: dict, pi: int) -> dict:
 
     【v5.16.1】补逐章 prompt/指令/正文。
     【多章显示修复】不再 [:2000] 截断 —— 原截断导致前端正文永远显示 2000 字且句子腰斩。
-    rendered_prompt/user_input/sample_text 均存全文（示例书章节约 3k-8k 字，响应 ~0.6MB 可接受）。
+    rendered_prompt/user_input/sample_text 均存全文（青山章节约 3k-8k 字，响应 ~0.6MB 可接受）。
     """
     return {
         "idx": p.get("_chapter_idx", pi),

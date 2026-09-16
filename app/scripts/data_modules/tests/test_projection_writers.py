@@ -32,12 +32,12 @@ def test_state_projection_writer_applies_accepted_commit(tmp_path):
     result = writer.apply(
         {
             "meta": {"status": "accepted", "chapter": 3},
-            "state_deltas": [{"entity_id": "x", "field": "realm", "new": "武者"}],
+            "state_deltas": [{"entity_id": "x", "field": "realm", "new": "斗者"}],
         }
     )
     assert result["applied"] is True
     payload = json.loads((tmp_path / ".ainovel" / "state.json").read_text(encoding="utf-8"))
-    assert payload["entity_state"]["x"]["realm"] == "武者"
+    assert payload["entity_state"]["x"]["realm"] == "斗者"
     assert payload["progress"]["chapter_status"]["3"] == "chapter_committed"
     assert payload["progress"]["current_chapter"] == 3
     assert payload["progress"]["last_updated"]
@@ -119,8 +119,8 @@ def test_state_projection_writer_derives_delta_from_power_breakthrough_event(tmp
                     "event_id": "evt-001",
                     "chapter": 3,
                     "event_type": "power_breakthrough",
-                    "subject": "linyue",
-                    "payload": {"from": "武者", "to": "武师"},
+                    "subject": "xiaoyan",
+                    "payload": {"from": "斗者", "to": "斗师"},
                 }
             ],
         }
@@ -128,7 +128,7 @@ def test_state_projection_writer_derives_delta_from_power_breakthrough_event(tmp
 
     payload = json.loads((tmp_path / ".ainovel" / "state.json").read_text(encoding="utf-8"))
     assert result["applied"] is True
-    assert payload["entity_state"]["linyue"]["realm"] == "武师"
+    assert payload["entity_state"]["xiaoyan"]["realm"] == "斗师"
 
 
 def test_state_projection_writer_updates_strand_tracker(tmp_path):
@@ -201,12 +201,12 @@ def test_accepted_commit_updates_state_json_end_to_end(tmp_path):
         review_result={"blocking_count": 0},
         fulfillment_result={"planned_nodes": ["发现陷阱"], "covered_nodes": ["发现陷阱"], "missed_nodes": [], "extra_nodes": []},
         disambiguation_result={"pending": []},
-        extraction_result={"state_deltas": [{"entity_id": "x", "field": "realm", "new": "武者"}], "entity_deltas": [], "accepted_events": []},
+        extraction_result={"state_deltas": [{"entity_id": "x", "field": "realm", "new": "斗者"}], "entity_deltas": [], "accepted_events": []},
     )
 
     StateProjectionWriter(tmp_path).apply(commit_payload)
     payload = json.loads((tmp_path / ".ainovel" / "state.json").read_text(encoding="utf-8"))
-    assert payload["entity_state"]["x"]["realm"] == "武者"
+    assert payload["entity_state"]["x"]["realm"] == "斗者"
 
 
 def test_index_projection_writer_applies_entity_delta(tmp_path):
@@ -219,20 +219,20 @@ def test_index_projection_writer_applies_entity_delta(tmp_path):
             "meta": {"status": "accepted", "chapter": 3},
             "entity_deltas": [
                 {
-                    "entity_id": "linyue",
-                    "canonical_name": "林越",
+                    "entity_id": "xiaoyan",
+                    "canonical_name": "萧炎",
                     "type": "角色",
-                    "current": {"realm": "武者"},
+                    "current": {"realm": "斗者"},
                     "chapter": 3,
                 }
             ],
         }
     )
 
-    entity = IndexManager(cfg).get_entity("linyue")
+    entity = IndexManager(cfg).get_entity("xiaoyan")
     assert result["applied"] is True
-    assert entity["canonical_name"] == "林越"
-    assert entity["current_json"]["realm"] == "武者"
+    assert entity["canonical_name"] == "萧炎"
+    assert entity["current_json"]["realm"] == "斗者"
 
 
 def test_index_projection_writer_registers_stable_protagonist_aliases(tmp_path):
@@ -310,9 +310,9 @@ def test_index_projection_writer_derives_relationship_from_event(tmp_path):
                     "event_id": "evt-001",
                     "chapter": 3,
                     "event_type": "relationship_changed",
-                    "subject": "linyue",
+                    "subject": "xiaoyan",
                     "payload": {
-                        "to_entity": "laoyaoshi",
+                        "to_entity": "yaolao",
                         "relationship_type": "师徒",
                         "description": "关系正式确立",
                     },
@@ -321,7 +321,7 @@ def test_index_projection_writer_derives_relationship_from_event(tmp_path):
         }
     )
 
-    rels = IndexManager(cfg).get_relationship_between("linyue", "laoyaoshi")
+    rels = IndexManager(cfg).get_relationship_between("xiaoyan", "yaolao")
     assert result["applied"] is True
     assert rels[0]["type"] == "师徒"
 
@@ -344,7 +344,7 @@ def test_index_projection_writer_derives_artifact_entity_from_event(tmp_path):
                     "payload": {
                         "artifact_id": "black_ring",
                         "name": "黑戒",
-                        "owner": "linyue",
+                        "owner": "xiaoyan",
                     },
                 }
             ],
@@ -354,7 +354,7 @@ def test_index_projection_writer_derives_artifact_entity_from_event(tmp_path):
     entity = IndexManager(cfg).get_entity("black_ring")
     assert result["applied"] is True
     assert entity["canonical_name"] == "黑戒"
-    assert entity["current_json"]["holder"] == "linyue"
+    assert entity["current_json"]["holder"] == "xiaoyan"
 
 
 def test_accepted_commit_writes_chapter_index_tables(tmp_path):
@@ -373,17 +373,17 @@ def test_accepted_commit_writes_chapter_index_tables(tmp_path):
         disambiguation_result={"pending": []},
         extraction_result={
             "summary_text": "本章摘要",
-            "state_deltas": [{"entity_id": "linyue", "field": "realm", "old": "武者", "new": "武师"}],
+            "state_deltas": [{"entity_id": "xiaoyan", "field": "realm", "old": "斗者", "new": "斗师"}],
             "entity_deltas": [],
-            "entities_appeared": [{"id": "linyue", "mentions": ["林越"], "confidence": 0.95}],
+            "entities_appeared": [{"id": "xiaoyan", "mentions": ["萧炎"], "confidence": 0.95}],
             "scenes": [
                 {
                     "index": 1,
                     "start_line": 1,
                     "end_line": 12,
                     "location": "山门",
-                    "summary": "林越完成突破",
-                    "characters": ["linyue"],
+                    "summary": "萧炎完成突破",
+                    "characters": ["xiaoyan"],
                 }
             ],
             "accepted_events": [],
@@ -395,11 +395,11 @@ def test_accepted_commit_writes_chapter_index_tables(tmp_path):
 
     assert result["projection_status"]["index"] == "done"
     assert manager.get_chapter(3)["summary"] == "本章摘要"
-    assert manager.get_chapter_appearances(3)[0]["entity_id"] == "linyue"
+    assert manager.get_chapter_appearances(3)[0]["entity_id"] == "xiaoyan"
     assert manager.get_scenes(3)[0]["location"] == "山门"
     changes = manager.get_chapter_state_changes(3)
     assert len(changes) == 1
-    assert changes[0]["entity_id"] == "linyue"
+    assert changes[0]["entity_id"] == "xiaoyan"
     assert changes[0]["field"] == "realm"
 
 
@@ -418,7 +418,7 @@ def test_index_projection_writer_records_state_change_from_event(tmp_path):
                     "event_id": "evt-001",
                     "chapter": 3,
                     "event_type": "character_state_changed",
-                    "subject": "linyue",
+                    "subject": "xiaoyan",
                     "payload": {"field": "mood", "old": "躁动", "new": "冷静"},
                 }
             ],
@@ -428,7 +428,7 @@ def test_index_projection_writer_records_state_change_from_event(tmp_path):
     changes = IndexManager(cfg).get_chapter_state_changes(3)
     assert result["state_changes"] == 1
     assert len(changes) == 1
-    assert changes[0]["entity_id"] == "linyue"
+    assert changes[0]["entity_id"] == "xiaoyan"
     assert changes[0]["field"] == "mood"
 
 
@@ -459,7 +459,7 @@ def test_memory_projection_writer_maps_commit_into_scratchpad(tmp_path):
         {
             "meta": {"status": "accepted", "chapter": 3},
             "state_deltas": [
-                {"entity_id": "linyue", "field": "realm", "old": "武者", "new": "武师"}
+                {"entity_id": "xiaoyan", "field": "realm", "old": "斗者", "new": "斗师"}
             ],
             "entity_deltas": [],
             "accepted_events": [],
@@ -469,7 +469,7 @@ def test_memory_projection_writer_maps_commit_into_scratchpad(tmp_path):
     store = ScratchpadManager(cfg)
     chars = store.query(category="character_state", status="active")
     assert result["applied"] is True
-    assert any(x.subject == "linyue" and x.field == "realm" for x in chars)
+    assert any(x.subject == "xiaoyan" and x.field == "realm" for x in chars)
 
 
 def test_memory_projection_writer_maps_open_loop_event_into_scratchpad(tmp_path):
@@ -487,8 +487,8 @@ def test_memory_projection_writer_maps_open_loop_event_into_scratchpad(tmp_path)
                     "event_id": "evt-001",
                     "chapter": 3,
                     "event_type": "open_loop_created",
-                    "subject": "出师之约",
-                    "payload": {"content": "出师之约"},
+                    "subject": "三年之约",
+                    "payload": {"content": "三年之约"},
                 }
             ],
         }
@@ -497,4 +497,4 @@ def test_memory_projection_writer_maps_open_loop_event_into_scratchpad(tmp_path)
     store = ScratchpadManager(cfg)
     loops = store.query(category="open_loop", status="active")
     assert result["applied"] is True
-    assert any("出师之约" in x.subject for x in loops)
+    assert any("三年之约" in x.subject for x in loops)

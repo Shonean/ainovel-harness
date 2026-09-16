@@ -1,61 +1,21 @@
-AINOVEL HARNESS 非商用许可协议
-（AINOVEL HARNESS NON-COMMERCIAL LICENSE）
+MIT License
 
 Copyright (c) 2026 Shonean
-版权所有 (c) 2026 Shonean
 
-一、声明（Declaration）
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-本许可适用于 AInovel Harness 及其衍生作品的全部源代码、文档、配置与资源
-（以下统称"软件"）。本软件采用**非商用许可**：任何人可以免费学习、研究、
-使用与二次开发本软件，但**严禁任何形式的商业使用**。
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-This software is distributed under a NON-COMMERCIAL LICENSE. Anyone may
-freely use, study, modify and redistribute it for non-commercial purposes,
-but any commercial use is STRICTLY PROHIBITED without the author's written
-permission.
-
-二、许可授予（Grant of License）
-
-在遵守本协议全部条款的前提下，作者授予任何个人或组织（以下称"被许可人"）
-一项不可转让、非独占、免许可费的权利，允许其：
-
-1. 以**非商业目的**使用、复制、修改、展示、分发本软件及其源代码；
-2. 将本软件用于个人学习、学术研究、教育教学、评测与实验；
-3. 基于本软件进行非商业的开源二次开发与再分发，但必须完整保留本许可
-   协议、版权声明与软件内出现的署名信息；
-4. 为本项目提交贡献（Issue、Pull Request、文档、测试等），提交即视为
-   同意本许可条款。
-
-三、禁止事项（Prohibited Uses）
-
-未经作者书面授权，严禁以下任何行为：
-
-1. 任何形式的商业使用，包括但不限于销售软件、以软件功能收取服务费用；
-2. 将本软件或其衍生作品用于任何以营利为目的的产品、服务或业务流程；
-3. 以 SaaS / 云服务 / 托管 / 订阅等方式对外提供本软件功能并直接或间接
-   收费；
-4. 将本软件或其衍生作品集成、打包进任何商业软件、商业发行物或商业培训
-   内容；
-5. 删除、遮挡或修改本许可协议与版权声明后用于商业目的；
-6. 以本软件名义或使用其标识进行商业宣传。
-
-四、商用授权（Commercial License）
-
-任何形式的商业使用，须另行联系作者并签署书面商用授权协议后方可进行。
-
-五、免责声明（Disclaimer）
-
-本软件按"原样"（AS IS）提供，作者不对其适用性、正确性、完整性或性能作
-任何明示或默示的担保，包括但不限于适销性与特定用途适用性担保。因使用或
-无法使用本软件所产生的任何直接或间接损失，作者不承担任何责任。
-
-六、其他（Miscellaneous）
-
-1. 本协议的最终解释权归作者所有。
-2. 如本协议任一条款被认定为无效或不可执行，不影响其余条款的效力。
-3. 被许可人违反本协议任何条款的，本协议授予的全部权利自动终止。
-4. 本协议未尽事宜，适用中华人民共和国法律。
-
-This license shall be governed by and construed in accordance with the laws
-of the People's Republic of China.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

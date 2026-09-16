@@ -911,7 +911,7 @@ async def classify_chapters(
     """对整本小说（或指定范围）做剧情桥段分类。
 
     Args:
-        filepath: 相对 corpus_dir 的文件路径（如 玄幻武侠/示例书/示例书(1-500章).txt）
+        filepath: 相对 corpus_dir 的文件路径（如 玄幻武侠/青山/青山(1-500章).txt）
         start_chapter / end_chapter: 分类的章号范围（1-based，默认全书）
         window_size: 每窗直接通读多少章（默认 8；v5.24 为输出小而缩小，避免窗口 JSON 截断）
         corpus_dir: 语料目录（默认自动解析）
@@ -930,7 +930,7 @@ async def classify_chapters(
     total = parsed["total_chapters"]
     if not chapters:
         raise RuntimeError("章节解析为空")
-    # 用实际章号边界 clamp（章号可能非连续：如 示例书(501-815章).txt 内章号 474-772，
+    # 用实际章号边界 clamp（章号可能非连续：如 青山(501-815章).txt 内章号 474-772，
     # 若按 total_chapters=299 clamp 会把 end 压到 299，selected 过滤 474-772 全空 → 0 段）
     min_ch = min(c["chapter_num"] for c in chapters)
     max_ch = max(c["chapter_num"] for c in chapters)

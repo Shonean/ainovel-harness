@@ -1,0 +1,243 @@
+{
+  "schema_version": "0.1",
+  "pack_id": "pack_demo_arc0001_c0ffee",
+  "size": {
+    "width": 1080,
+    "height": 1920
+  },
+  "fps": 24,
+  "durations": {
+    "still_push": 3.0,
+    "closeup": 3.0,
+    "shot_reverse_shot": 3.0,
+    "stage_cue": 2.5,
+    "end_card": 3.5
+  },
+  "tracks": {
+    "narration": [
+      "n001_s00",
+      "n001_s01",
+      "n002_s00",
+      "end_a_card",
+      "end_b_card"
+    ],
+    "dialogue": [
+      "n001_s03",
+      "n002_s01",
+      "n002_s02"
+    ],
+    "stage": [
+      "n001_s02",
+      "n002_s03"
+    ]
+  },
+  "shots": [
+    {
+      "shot_id": "n001_s00",
+      "node_id": "n001",
+      "index": 0,
+      "line_kind": "narration",
+      "type": "still_push",
+      "camera": {
+        "move": "push_in",
+        "from_scale": 1.0,
+        "to_scale": 1.08
+      },
+      "background": "bg_classroom_night",
+      "track": "narration",
+      "duration": 3.0,
+      "text": "深夜的旧教室里，粉笔灰在路灯光柱中缓缓下沉，每个座位上都坐着一个纸人。",
+      "speaker": null,
+      "speaker_name": null,
+      "expression": null,
+      "stage_cue": null
+    },
+    {
+      "shot_id": "n001_s01",
+      "node_id": "n001",
+      "index": 1,
+      "line_kind": "inner",
+      "type": "closeup",
+      "camera": {
+        "move": "push_in",
+        "from_scale": 1.0,
+        "to_scale": 1.14
+      },
+      "background": "bg_classroom_night",
+      "track": "narration",
+      "duration": 3.0,
+      "text": "这是哪儿？我明明记得刚交完最后一科的卷子……",
+      "speaker": "char_chen",
+      "speaker_name": "陈守念",
+      "expression": null,
+      "stage_cue": null
+    },
+    {
+      "shot_id": "n001_s02",
+      "node_id": "n001",
+      "index": 2,
+      "line_kind": "stage",
+      "type": "stage_cue",
+      "camera": {
+        "move": "static",
+        "from_scale": 1.0,
+        "to_scale": 1.0
+      },
+      "background": "bg_classroom_night",
+      "track": "stage",
+      "duration": 2.5,
+      "text": "所有纸人同时转过头来。",
+      "speaker": null,
+      "speaker_name": null,
+      "expression": null,
+      "stage_cue": "paper_figures_turn"
+    },
+    {
+      "shot_id": "n001_s03",
+      "node_id": "n001",
+      "index": 3,
+      "line_kind": "dialogue",
+      "type": "shot_reverse_shot",
+      "camera": {
+        "move": "pan",
+        "from_scale": 1.05,
+        "to_scale": 1.05,
+        "pan": "left",
+        "eyeline": "front"
+      },
+      "background": "bg_classroom_night",
+      "track": "dialogue",
+      "duration": 3.0,
+      "text": "谁在看我？",
+      "speaker": "char_chen",
+      "speaker_name": "陈守念",
+      "expression": "fear",
+      "stage_cue": null
+    },
+    {
+      "shot_id": "n002_s00",
+      "node_id": "n002",
+      "index": 0,
+      "line_kind": "narration",
+      "type": "still_push",
+      "camera": {
+        "move": "push_in",
+        "from_scale": 1.0,
+        "to_scale": 1.08
+      },
+      "background": "bg_hallway_dusk",
+      "track": "narration",
+      "duration": 3.0,
+      "text": "走廊尽头，一张病人卡从课桌缝里滑出来，正面朝上。",
+      "speaker": null,
+      "speaker_name": null,
+      "expression": null,
+      "stage_cue": null
+    },
+    {
+      "shot_id": "n002_s01",
+      "node_id": "n002",
+      "index": 1,
+      "line_kind": "dialogue",
+      "type": "shot_reverse_shot",
+      "camera": {
+        "move": "pan",
+        "from_scale": 1.05,
+        "to_scale": 1.05,
+        "pan": "right",
+        "eyeline": "front"
+      },
+      "background": "bg_hallway_dusk",
+      "track": "dialogue",
+      "duration": 3.0,
+      "text": "你终于把它捡起来了。",
+      "speaker": "char_lin",
+      "speaker_name": "林老师",
+      "expression": "calm",
+      "stage_cue": null
+    },
+    {
+      "shot_id": "n002_s02",
+      "node_id": "n002",
+      "index": 2,
+      "line_kind": "dialogue",
+      "type": "shot_reverse_shot",
+      "camera": {
+        "move": "pan",
+        "from_scale": 1.05,
+        "to_scale": 1.05,
+        "pan": "left",
+        "eyeline": "front"
+      },
+      "background": "bg_hallway_dusk",
+      "track": "dialogue",
+      "duration": 3.0,
+      "text": "这名字……是我自己的。",
+      "speaker": "char_chen",
+      "speaker_name": "陈守念",
+      "expression": "fear",
+      "stage_cue": null
+    },
+    {
+      "shot_id": "n002_s03",
+      "node_id": "n002",
+      "index": 3,
+      "line_kind": "stage",
+      "type": "stage_cue",
+      "camera": {
+        "move": "static",
+        "from_scale": 1.0,
+        "to_scale": 1.0
+      },
+      "background": "bg_hallway_dusk",
+      "track": "stage",
+      "duration": 2.5,
+      "text": "灯管闪烁两下，熄了半边。",
+      "speaker": null,
+      "speaker_name": null,
+      "expression": null,
+      "stage_cue": "light_flicker"
+    },
+    {
+      "shot_id": "end_a_card",
+      "node_id": "end_a",
+      "index": 0,
+      "line_kind": "ending",
+      "type": "end_card",
+      "camera": {
+        "move": "static",
+        "from_scale": 1.0,
+        "to_scale": 1.0
+      },
+      "background": null,
+      "track": "narration",
+      "duration": 3.5,
+      "text": "接受真相\n陈守念把病人卡翻面，接受了自己也在名单上的事实。",
+      "speaker": null,
+      "speaker_name": null,
+      "expression": null,
+      "stage_cue": null
+    },
+    {
+      "shot_id": "end_b_card",
+      "node_id": "end_b",
+      "index": 0,
+      "line_kind": "ending",
+      "type": "end_card",
+      "camera": {
+        "move": "static",
+        "from_scale": 1.0,
+        "to_scale": 1.0
+      },
+      "background": null,
+      "track": "narration",
+      "duration": 3.5,
+      "text": "拒绝离开\n陈守念把卡塞回桌缝，转身走进更深的黑暗。",
+      "speaker": null,
+      "speaker_name": null,
+      "expression": null,
+      "stage_cue": null
+    }
+  ],
+  "warnings": []
+}

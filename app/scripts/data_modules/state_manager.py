@@ -303,31 +303,31 @@ class SQLStateManager:
 
     # 写入实体
     manager.upsert_entity(EntityData(
-        id="linyue",
+        id="xiaoyan",
         type="角色",
-        name="林越",
+        name="萧炎",
         tier="核心",
-        current={"realm": "武师", "location": "天云宗"},
+        current={"realm": "斗师", "location": "天云宗"},
         aliases=["小炎子", "废柴"],
         is_protagonist=True
     ))
 
     # 写入状态变化
     manager.record_state_change(
-        entity_id="linyue",
+        entity_id="xiaoyan",
         field="realm",
-        old_value="武者",
-        new_value="武师",
+        old_value="斗者",
+        new_value="斗师",
         reason="闭关突破",
         chapter=100
     )
 
     # 写入关系
     manager.upsert_relationship(
-        from_entity="linyue",
-        to_entity="laoyaoshi",
+        from_entity="xiaoyan",
+        to_entity="yaolao",
         type="师徒",
-        description="药师收林越为徒",
+        description="药老收萧炎为徒",
         chapter=5
     )
 
@@ -542,13 +542,13 @@ class SQLStateManager:
         参数:
         - chapter: 章节号
         - entities_appeared: 出场的已有实体
-          [{"id": "linyue", "type": "角色", "mentions": ["林越", "他"], "confidence": 0.95}]
+          [{"id": "xiaoyan", "type": "角色", "mentions": ["萧炎", "他"], "confidence": 0.95}]
         - entities_new: 新发现的实体
           [{"suggested_id": "hongyi_girl", "name": "红衣女子", "type": "角色", "tier": "装饰"}]
         - state_changes: 状态变化
-          [{"entity_id": "linyue", "field": "realm", "old": "武者", "new": "武师", "reason": "突破"}]
+          [{"entity_id": "xiaoyan", "field": "realm", "old": "斗者", "new": "斗师", "reason": "突破"}]
         - relationships_new: 新关系
-          [{"from": "linyue", "to": "hongyi_girl", "type": "相识", "description": "初次见面"}]
+          [{"from": "xiaoyan", "to": "hongyi_girl", "type": "相识", "description": "初次见面"}]
 
         返回: 写入统计
         """
@@ -714,7 +714,7 @@ class SQLStateManager:
         """
         导出为 entities_v3 格式（用于兼容性）
 
-        返回: {"角色": {"linyue": {...}}, "地点": {...}, ...}
+        返回: {"角色": {"xiaoyan": {...}}, "地点": {...}, ...}
         """
         result = {t: {} for t in self.ENTITY_TYPES}
 
@@ -742,7 +742,7 @@ class SQLStateManager:
         """
         导出为 alias_index 格式（用于兼容性）
 
-        返回: {"林越": [{"type": "角色", "id": "linyue"}], ...}
+        返回: {"萧炎": [{"type": "角色", "id": "xiaoyan"}], ...}
         """
         result = {}
 

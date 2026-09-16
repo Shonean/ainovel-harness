@@ -142,6 +142,14 @@ def _load_state_payload(*, required: bool = False) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+BOOK_MODES = ("premium", "mass")
+
+
+def _normalize_book_mode(value) -> str:
+    """书级模式规范化：非法/缺失一律 premium（存量书向后兼容）。"""
+    return value if value in BOOK_MODES else "premium"
+
+
 def _gather_chapter_data(project_root: Path, state: dict) -> list[dict]:
     """收集所有章节数据用于导出。"""
     chapters = []
@@ -447,6 +455,9 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         CORSMiddleware,
         # 【2026-08-23 收紧】不再全开 *：仅本机开发前端 + Tauri 壳（过渡期保留）+
         # VS Code webview 动态来源（正则）。扩展宿主经 REST 调用不带浏览器 CORS 限制。
+        # 【2026-09-05】+ Electron 桌面壳独立前端：窗口以 file:// 内嵌 dashboard dist
+        # （Origin: null，SPA 的 BASE 硬编码 http://127.0.0.1:8765 → 跨源 fetch）。
+        # 仅回环监听，浏览器 CORS 不防非浏览器客户端，放行 null 风险可控。
         allow_origins=[
             "http://localhost:5173",
             "http://127.0.0.1:5173",
@@ -454,8 +465,9 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
             "http://tauri.localhost",
             "https://tauri.localhost",
         ],
-        allow_origin_regex=r"^vscode-webview://|^https://[a-z0-9-]+\.vscode-cdn\.net$",
-        allow_methods=["GET", "POST"],
+        # Starlette 对 allow_origin_regex 做 fullmatch——分支必须通配到串尾
+        allow_origin_regex=r"^vscode-webview://.*|^https://[a-z0-9-]+\.vscode-cdn\.net$|^app://.*|^null$|^file://.*",
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
         allow_headers=["*"],
     )
 
@@ -557,16 +569,19 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         """返回当前选中书的根目录与元信息（AI 创作工作台取 book_root 用）。"""
         root = _get_project_root()
         if root is None:
-            return {"project_root": None, "test_book": False, "title": ""}
+            return {"project_root": None, "test_book": False, "title": "", "book_mode": "premium"}
         try:
             state = _load_state_payload()
             title = ((state.get("project_info") or {}).get("title") or "").strip()
+            book_mode = _normalize_book_mode(state.get("book_mode"))
         except HTTPException:
             title = ""
+            book_mode = "premium"
         return {
             "project_root": str(root.resolve()),
             "test_book": _is_test_book(),
             "title": title or root.name,
+            "book_mode": book_mode,
         }
 
     @app.get("/api/project/next-step")
@@ -748,7 +763,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
     def _book_stats(path: Path) -> dict:
         """读 .ainovel/ 给一本书补统计字段（首页书架信息密度用）。容错：缺失→null/0。"""
         st = {"arcs": 0, "chapters": 0, "avg_score": None, "polluted": 0,
-              "words": 0, "genre": None, "one_liner": None, "updated": 0}
+              "words": 0, "genre": None, "one_liner": None, "book_mode": "premium", "updated": 0}
         ain = path / ".ainovel"
         try:
             # 最近修改时间：.ainovel 目录下所有文件的最大 mtime
@@ -785,6 +800,40 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
                 if isinstance(bs, dict):
                     st["genre"] = bs.get("genre") or None
                     st["one_liner"] = bs.get("one_liner") or None
+        except Exception:
+            pass
+        # 书级模式（premium 精品 / mass 量产；缺省 premium）
+        try:
+            sf = ain / "state.json"
+            if sf.is_file():
+                state = json.loads(sf.read_text(encoding="utf-8"))
+                if isinstance(state, dict):
+                    st["book_mode"] = _normalize_book_mode(state.get("book_mode"))
+        except Exception:
+            pass
+        # 改编产物统计（期1/期3：pack 与漫剧成片；容错缺失→0，书卡改编出口行用）
+        st["adapt_packs"] = 0
+        st["adapt_ok"] = 0
+        st["drama_videos"] = 0
+        try:
+            ad = ain / "adaptation"
+            if ad.is_dir():
+                for d in ad.iterdir():
+                    if not d.is_dir():
+                        continue
+                    if d.name.endswith(".failed"):
+                        continue
+                    st["adapt_packs"] += 1
+                    vj = d / "validation.json"
+                    if vj.is_file():
+                        try:
+                            if json.loads(vj.read_text(encoding="utf-8")).get("ok") is True:
+                                st["adapt_ok"] += 1
+                        except Exception:
+                            pass
+                    dr = d / "drama"
+                    if dr.is_dir():
+                        st["drama_videos"] += sum(1 for f in dr.glob("*.mp4") if f.is_file())
         except Exception:
             pass
         return st
@@ -879,6 +928,144 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
     def list_projects():
         return {"projects": _list_projects()}
 
+    # ── 改编中心（T35：主页三层入口 + 全局总览）──────────────────────
+
+    def _adapt_pack_row(book_name: str, book_root: Path, d: Path) -> dict:
+        row = {"book": book_name, "book_root": str(book_root), "pack_id": d.name,
+               "failed": d.name.endswith(".failed"), "ok": None, "errors": 0,
+               "warnings": 0, "llm_calls": None, "cost_est": None,
+               "nodes": None, "endings": None, "drama_videos": 0,
+               "drama_latest": None, "updated": int(d.stat().st_mtime * 1000)}
+        try:
+            vj = d / "validation.json"
+            if vj.is_file():
+                v = json.loads(vj.read_text(encoding="utf-8"))
+                row["ok"] = bool(v.get("ok"))
+                row["errors"] = len(v.get("errors") or [])
+                row["warnings"] = len(v.get("warnings") or [])
+                stats = v.get("stats") or {}
+                row["llm_calls"] = stats.get("llm_calls")
+                row["cost_est"] = stats.get("cost_est")
+                row["nodes"] = stats.get("nodes")
+                row["endings"] = stats.get("endings")
+        except Exception:
+            pass
+        try:
+            dr = d / "drama"
+            if dr.is_dir():
+                mp4s = [f for f in dr.glob("*.mp4") if f.is_file()]
+                row["drama_videos"] = len(mp4s)
+                if mp4s:
+                    row["drama_latest"] = max(mp4s, key=lambda f: f.stat().st_mtime).name
+        except Exception:
+            pass
+        return row
+
+    @app.get("/api/adaptation/overview")
+    def adaptation_overview():
+        """改编中心总览：跨书 Pack + 全局资产库 + 成本账本 + 预算闸。容错降级，不阻断主页。"""
+        packs: list[dict] = []
+        try:
+            for b in _list_projects():
+                if b.get("incomplete"):
+                    continue
+                root = Path(b["project_root"])
+                ad = root / ".ainovel" / "adaptation"
+                if not ad.is_dir():
+                    continue
+                for d in sorted([p for p in ad.iterdir() if p.is_dir()],
+                                key=lambda p: p.stat().st_mtime, reverse=True):
+                    packs.append(_adapt_pack_row(b.get("name") or root.name, root, d))
+        except Exception:
+            pass
+        assets = {"total": 0, "by_kind": {}, "root": None}
+        try:
+            from prompt_harness.media.asset_store import AssetStore
+            store = AssetStore()
+            assets["root"] = str(getattr(store, "root", "") or "")
+            for _aid, ent in store.entries().items():
+                kind = (ent.to_dict() or {}).get("kind") or "other"
+                assets["by_kind"][kind] = assets["by_kind"].get(kind, 0) + 1
+                assets["total"] += 1
+        except Exception:
+            pass
+        ledger_rows: list = []
+        ledger_summary: dict = {}
+        try:
+            from prompt_harness.media.usage_ledger import default_ledger
+            lg = default_ledger()
+            if lg is not None:
+                ledger_summary = lg.summarize() or {}
+                ledger_rows = (lg.read_lines() or [])[-50:][::-1]
+        except Exception:
+            pass
+        budget = {"enabled": True, "image_month_cny": 200,
+                  "video_month_cny": 120, "director_month_usd": 30}
+        try:
+            from prompt_harness.media.asset_store import default_asset_library_root
+            bj = default_asset_library_root() / "budget.json"
+            if bj.is_file():
+                budget.update(json.loads(bj.read_text(encoding="utf-8")))
+        except Exception:
+            pass
+        totals = {
+            "packs": len([p for p in packs if not p["failed"]]),
+            "ok": len([p for p in packs if p.get("ok") is True]),
+            "drama_videos": sum(p["drama_videos"] for p in packs),
+            "cost_est": round(sum(p["cost_est"] or 0 for p in packs), 6),
+        }
+        return {"packs": packs, "totals": totals, "assets": assets,
+                "ledger_rows": ledger_rows, "ledger_summary": ledger_summary,
+                "budget": budget}
+
+    class _AdaptBudgetBody(BaseModel):
+        enabled: bool = True
+        image_month_cny: float = 200
+        video_month_cny: float = 120
+        director_month_usd: float = 30
+
+    @app.put("/api/adaptation/budget")
+    async def adaptation_budget_put(body: _AdaptBudgetBody):
+        from prompt_harness.media.asset_store import default_asset_library_root
+        bj = default_asset_library_root() / "budget.json"
+        bj.parent.mkdir(parents=True, exist_ok=True)
+        cfg = {"enabled": body.enabled, "image_month_cny": body.image_month_cny,
+               "video_month_cny": body.video_month_cny,
+               "director_month_usd": body.director_month_usd}
+        bj.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"ok": True, "budget": cfg}
+
+    @app.get("/api/adaptation/films")
+    def adaptation_films():
+        """成片管理跨书汇总（单集 + 合辑；T36 漫剧线收口）。容错降级，不阻断页面。"""
+        episodes: list[dict] = []
+        compilations: list[dict] = []
+        try:
+            from prompt_harness.drama import films as drama_films
+
+            for b in _list_projects():
+                if b.get("incomplete"):
+                    continue
+                root = Path(b["project_root"])
+                if not (root / ".ainovel").is_dir():
+                    continue
+                try:
+                    eps = drama_films.episodes(root)
+                    for e in eps:
+                        e["book"] = b.get("name") or root.name
+                        e["book_root"] = str(root)
+                    episodes.extend(eps)
+                    for c in drama_films.films_state(root).get("compilations") or []:
+                        c = dict(c)
+                        c["book"] = b.get("name") or root.name
+                        c["book_root"] = str(root)
+                        compilations.append(c)
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        return {"ok": True, "episodes": episodes, "compilations": compilations}
+
     class _SwitchBody(BaseModel):
         project_root: str
 
@@ -933,6 +1120,44 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         _write_project_pointer(new_root)
         _update_registry_current_project(new_root)
         return {"ok": True, "project_root": str(new_root), "name": new_root.name}
+
+    class _BookModeBody(BaseModel):
+        project_root: str
+        mode: str
+
+    @app.post("/api/project/mode")
+    async def set_book_mode(body: _BookModeBody):
+        """切换书级模式（premium 精品 / mass 量产）。
+
+        模式只影响前端界面与批量生成默认行为；两种模式数据同构，仅改 state.json 字段。
+        批量任务运行中禁止切换（409）；task_runtime 不可用时跳过该保护。
+        """
+        if body.mode not in BOOK_MODES:
+            raise HTTPException(422, f"非法 mode：{body.mode}（可选 premium|mass）")
+        target = Path(body.project_root).resolve()
+        if not _is_book_dir(target):
+            raise HTTPException(400, f"不是有效的书目录（缺 .ainovel/state.json）：{target}")
+
+        try:
+            from prompt_harness import task_runtime
+        except ImportError:
+            task_runtime = None
+        if task_runtime is not None:
+            for t in (task_runtime.tasks or {}).values():
+                kind = t.get("kind") or t.get("type")
+                if kind == "ai_creation_batch_generate" and t.get("status") == "running":
+                    raise HTTPException(409, "批量生成运行中，请先停止后再切换模式")
+
+        state_path = target / ".ainovel" / "state.json"
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if not isinstance(state, dict):
+                state = {}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(500, f"state.json 读取失败: {exc}") from exc
+        state["book_mode"] = body.mode
+        _atomic_write_json(state_path, state)
+        return {"ok": True, "project_root": str(target), "book_mode": body.mode}
 
     class _DeleteProjectBody(BaseModel):
         project_root: str
@@ -1074,6 +1299,7 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         reference_text_path: str | None = None
         model: str | None = None
         test_book: bool = False
+        book_mode: str = "premium"
 
     @app.post("/api/project/create")
     async def create_project(body: _CreateProjectBody):
@@ -1084,6 +1310,9 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         由 AI 创作模块 `/api/prompt-harness/ai-creation/init`（手写 brief → 设定集 + elements.json）初始化。
         """
         is_test = bool(body.test_book)
+
+        if body.book_mode not in BOOK_MODES:
+            raise HTTPException(422, f"非法 book_mode：{body.book_mode}（可选 premium|mass）")
 
         if start_init_task is None and not is_test:
             raise HTTPException(503, "LLM agent 路由未挂载，无法初始化新书")
@@ -1127,10 +1356,11 @@ def create_app(project_root: str | Path | None = None) -> FastAPI:
         except OSError:
             pass
 
-        # 写最小 state.json（包含 test_book 标记，init 会填充剩余字段）
+        # 写最小 state.json（包含 test_book 标记与书级模式，init 会填充剩余字段）
         _atomic_write_json(new_root / ".ainovel" / "state.json", {
             "schema_version": "5.0",
             "test_book": body.test_book,
+            "book_mode": body.book_mode,
             "project_info": {"title": body.name},
         })
 

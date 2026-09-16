@@ -1,0 +1,32 @@
+{
+  "characters": [
+    {
+      "id": "char_chen",
+      "name": "陈守念",
+      "role": "protagonist",
+      "aliases": [],
+      "description": "故事主角，以穿越者身份开局，在荒废教室中醒来。",
+      "source_element": "e_chen",
+      "presence": ["n001", "n002"],
+      "assets": {
+        "portrait": "spr_chen_default",
+        "expressions": ["default", "fear", "calm"]
+      },
+      "voice": { "kokoro": "zf_xiaoxiao", "cloud": "voice_id_placeholder" }
+    },
+    {
+      "id": "char_lin",
+      "name": "林老师",
+      "role": "supporting",
+      "aliases": [],
+      "description": "只在黄昏走廊出现的教师，手里永远抱着一叠点名册。",
+      "source_element": "e_lin",
+      "presence": ["n002"],
+      "assets": {
+        "portrait": "spr_lin_default",
+        "expressions": ["default", "calm"]
+      },
+      "voice": { "kokoro": "zm_yunxi", "cloud": "voice_id_placeholder" }
+    }
+  ]
+}

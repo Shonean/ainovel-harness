@@ -390,14 +390,14 @@ def test_render_text_contains_rag_assist_section_when_hits_exist(tmp_path):
             "invoked": True,
             "mode": "auto",
             "intent": "relationship",
-            "query": "第12章 人物关系与动机：林越与药师发生冲突",
+            "query": "第12章 人物关系与动机：萧炎与药老发生冲突",
             "hits": [
                 {
                     "chapter": 9,
                     "scene_index": 2,
                     "source": "graph_hybrid",
                     "score": 0.91,
-                    "content": "林越与药师在修炼方向上发生分歧。",
+                    "content": "萧炎与药老在修炼方向上发生分歧。",
                 }
             ],
         },
@@ -408,7 +408,7 @@ def test_render_text_contains_rag_assist_section_when_hits_exist(tmp_path):
     assert parsed["rag_assist"]["invoked"] is True
     assert parsed["rag_assist"]["mode"] == "auto"
     assert parsed["rag_assist"]["hits"][0]["source"] == "graph_hybrid"
-    assert "林越与药师" in parsed["rag_assist"]["hits"][0]["content"]
+    assert "萧炎与药老" in parsed["rag_assist"]["hits"][0]["content"]
 
 
 def test_build_chapter_context_payload_includes_plot_structure(tmp_path):
@@ -434,11 +434,11 @@ def test_build_chapter_context_payload_includes_plot_structure(tmp_path):
     outline_dir.mkdir(parents=True, exist_ok=True)
     (outline_dir / "第1卷-详细大纲.md").write_text(
         """### 第5章：试炼开局
-CBN：林越抵达外院试炼场
+CBN：萧炎抵达外院试炼场
 CPNs：
 - 导师宣布试炼规则
-- 林越发现规则被人做了手脚
-CEN：林越决定先隐忍观察
+- 萧炎发现规则被人做了手脚
+CEN：萧炎决定先隐忍观察
 必须覆盖节点：规则异常暴露、决定隐忍
 本章禁区：不能直接揭穿黑手
 """,
@@ -447,9 +447,9 @@ CEN：林越决定先隐忍观察
 
     payload = build_chapter_context_payload(tmp_path, 5)
     plot_structure = payload.get("plot_structure") or {}
-    assert plot_structure.get("cbn") == "林越抵达外院试炼场"
-    assert plot_structure.get("cpns") == ["导师宣布试炼规则", "林越发现规则被人做了手脚"]
-    assert plot_structure.get("cen") == "林越决定先隐忍观察"
+    assert plot_structure.get("cbn") == "萧炎抵达外院试炼场"
+    assert plot_structure.get("cpns") == ["导师宣布试炼规则", "萧炎发现规则被人做了手脚"]
+    assert plot_structure.get("cen") == "萧炎决定先隐忍观察"
     assert plot_structure.get("mandatory_nodes") == ["规则异常暴露", "决定隐忍"]
     assert plot_structure.get("prohibitions") == ["不能直接揭穿黑手"]
 

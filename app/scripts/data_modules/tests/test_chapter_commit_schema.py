@@ -28,7 +28,7 @@ def test_artifact_models_preserve_valid_top_level_payloads():
     extraction = ExtractionResult.model_validate(
         {
             "accepted_events": [],
-            "state_deltas": [{"entity_id": "linyue", "field": "realm", "new": "fighter"}],
+            "state_deltas": [{"entity_id": "xiaoyan", "field": "realm", "new": "fighter"}],
             "entity_deltas": [],
             "summary_text": "summary",
         }
@@ -37,7 +37,7 @@ def test_artifact_models_preserve_valid_top_level_payloads():
     assert review.model_dump()["issues_count"] == 2
     assert fulfillment.covered_nodes == ["find trap"]
     assert disambiguation.pending == []
-    assert extraction.state_deltas[0]["entity_id"] == "linyue"
+    assert extraction.state_deltas[0]["entity_id"] == "xiaoyan"
 
 
 def test_artifact_models_reject_nested_wrappers_and_missing_core_fields():
@@ -67,7 +67,7 @@ def test_accepted_event_model_normalizes_aliases_before_story_event_validation()
         [
             {
                 "type": "scene_open",
-                "characters": ["linyue"],
+                "characters": ["xiaoyan"],
                 "payload": {"content": "new mystery"},
             }
         ],
@@ -76,7 +76,7 @@ def test_accepted_event_model_normalizes_aliases_before_story_event_validation()
     assert events[0]["event_id"].startswith("evt-ch076-001-")
     assert events[0]["chapter"] == 76
     assert events[0]["event_type"] == "open_loop_created"
-    assert events[0]["subject"] == "linyue"
+    assert events[0]["subject"] == "xiaoyan"
 
 
 def test_accepted_event_model_rejects_malformed_event_collections():
@@ -95,7 +95,7 @@ def test_accepted_event_model_rejects_blank_subject_and_unknown_type():
                 {
                     "event_type": "open_loop_created",
                     "subject": "   ",
-                    "payload": {"content": "出师之约提及"},
+                    "payload": {"content": "三年之约提及"},
                 }
             ],
         )
@@ -107,7 +107,7 @@ def test_accepted_event_model_rejects_blank_subject_and_unknown_type():
                 {
                     "event_id": "evt-unknown",
                     "event_type": "not_a_story_event",
-                    "subject": "linyue",
+                    "subject": "xiaoyan",
                     "payload": {},
                 }
             ],

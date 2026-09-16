@@ -27,9 +27,9 @@ def test_process_extraction_and_register_new_entities(temp_project):
     idx = IndexManager(temp_project)
     idx.upsert_entity(
         EntityMeta(
-            id="linyue",
+            id="xiaoyan",
             type="角色",
-            canonical_name="林越",
+            canonical_name="萧炎",
             current={},
             first_appearance=1,
             last_appearance=1,
@@ -39,9 +39,9 @@ def test_process_extraction_and_register_new_entities(temp_project):
     results, warnings = linker.process_extraction_result(
         [
             {
-                "mention": "林越",
-                "candidates": ["linyue"],
-                "suggested": "linyue",
+                "mention": "萧炎",
+                "candidates": ["xiaoyan"],
+                "suggested": "xiaoyan",
                 "confidence": 0.7,
             },
             {
@@ -75,9 +75,9 @@ def test_entity_linker_cli(temp_project, monkeypatch, capsys):
     idx = IndexManager(temp_project)
     idx.upsert_entity(
         EntityMeta(
-            id="linyue",
+            id="xiaoyan",
             type="角色",
-            canonical_name="林越",
+            canonical_name="萧炎",
             current={},
             first_appearance=1,
             last_appearance=1,
@@ -90,10 +90,10 @@ def test_entity_linker_cli(temp_project, monkeypatch, capsys):
 
     root = str(temp_project.project_root)
 
-    run_cli(["--project-root", root, "register-alias", "--entity", "linyue", "--alias", "炎帝"])
+    run_cli(["--project-root", root, "register-alias", "--entity", "xiaoyan", "--alias", "炎帝"])
     run_cli(["--project-root", root, "lookup", "--mention", "炎帝"])
     run_cli(["--project-root", root, "lookup", "--mention", "不存在"])
     run_cli(["--project-root", root, "lookup-all", "--mention", "炎帝"])
-    run_cli(["--project-root", root, "list-aliases", "--entity", "linyue"])
+    run_cli(["--project-root", root, "list-aliases", "--entity", "xiaoyan"])
 
     capsys.readouterr()

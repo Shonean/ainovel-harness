@@ -15,12 +15,12 @@ def test_memory_item_roundtrip_and_payload():
         id="m1",
         layer="semantic",
         category="character_state",
-        subject="linyue",
+        subject="xiaoyan",
         field="realm",
         value="筑基三层",
         payload={"old_value": "筑基二层"},
         source_chapter=12,
-        evidence=["state_change:linyue:realm:12"],
+        evidence=["state_change:xiaoyan:realm:12"],
     )
     raw = item.to_dict()
     rebuilt = MemoryItem.from_dict(raw)

@@ -66,7 +66,7 @@ function Chain() {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {[
-                { ic: '', t: '语料库', d: '参考小说 · 示例', r: '2 本' },
+                { ic: '', t: '语料库', d: '大奉打更人 · 青山', r: '2 本' },
                 { ic: '', t: '榨干提取', d: '逐章压缩阶梯 → 重建校验', r: '达标≥0.65' },
                 { ic: '', t: '模板库', d: '去实体化槽位模板 l1-l4', r: '嵌入索引' },
                 { ic: '', t: '命中 → state.template', d: 'new_arc 自动 match（相似≥0.50）', r: '格式+策略注入' },

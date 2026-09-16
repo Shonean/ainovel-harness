@@ -1,0 +1,131 @@
+/* AInovel Harness 桌面端外壳样式（深色主题，与 theme.css 协调） */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+.shell {
+  display: flex;
+  height: 100vh;
+  background: #0f0f1a;
+  color: #d5d5e0;
+}
+
+/* ── 左侧导航栏 ── */
+.shell-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 72px;
+  flex: 0 0 72px;
+  background: #16161f;
+  border-right: 1px solid #26263a;
+  padding: 8px 6px;
+  gap: 4px;
+  box-sizing: border-box;
+}
+
+.shell-logo {
+  font-size: 24px;
+  text-align: center;
+  padding: 6px 0 10px;
+  cursor: default;
+}
+
+.nav-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #9a9ab0;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.nav-btn:hover {
+  background: #1f1f2e;
+  color: #e0e0ec;
+}
+.nav-btn.active {
+  background: #2a2a40;
+  color: #6c8cff;
+}
+.nav-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+.nav-name {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.nav-spacer {
+  flex: 1;
+}
+
+.nav-status {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #555;
+  transition: background 0.3s;
+}
+.nav-status.ok .status-dot {
+  background: #3ecf6e;
+  box-shadow: 0 0 8px #3ecf6e88;
+}
+
+/* ── 主面板区 ── */
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: #0f0f1a;
+}
+
+/* ── 右栏创作助手 ── */
+.shell-assistant {
+  flex: 0 0 360px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #26263a;
+  background: #12121c;
+  min-width: 0;
+}
+.assistant-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #26263a;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c8c8d8;
+  background: #16161f;
+  flex: 0 0 auto;
+}
+.assistant-close {
+  border: none;
+  background: transparent;
+  color: #9a9ab0;
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+}
+.assistant-close:hover {
+  color: #fff;
+}
+.assistant-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}

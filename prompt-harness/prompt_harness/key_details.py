@@ -412,6 +412,66 @@ def get_key_details(text: str) -> dict:
 
 # ══ 事实一致性评分 ══════════════════════════════════════════════════
 
+def _scan_all_numbers(text: str) -> list[dict]:
+    """候选侧全量数字扫描（与 extract_numbers 同源 token 规则；无 cap、不按显著度排序）。
+
+    供 v522_fact_conflict_pen 冲突检测：锚点来自 extract_numbers（cap 8 按显著度截断），
+    候选侧必须全量扫描才不会漏掉低显著度的偷换数字。
+    """
+    seen: list[dict] = []
+    for m in _NUM_TOKEN_RE.finditer(text or ""):
+        num, unit = m.group(1), (m.group(2) or "")
+        if not num:
+            continue
+        if num in _CN_NUM and not unit and len(num) == 1:
+            continue
+        try:
+            val = _token_value(num)
+        except Exception:
+            continue
+        if val == 0:
+            continue
+        if any(abs(o["value"] - val) < 1e-6
+               and (o["unit"] == unit or not o["unit"] or not unit)
+               for o in seen):
+            continue
+        seen.append({"text": m.group(0), "value": val, "unit": unit})
+    return seen
+
+
+_CITE_BOOK_RE = re.compile('[《<]([^》>\n]{1,24})[》>]')
+_CITE_VERB_RE = re.compile('([一-鿿]{2,6})(曾说|曾经说过|有云|名言|教导|点评过)')
+_CITE_PRONOUNS = set("你我他她它们这那")
+
+
+def _scan_fabricated_citations(cand: str, target: str) -> list[str]:
+    """候选侧捏造引用扫描（v522_fact_fabricate_pen 专用，纯规则零成本）。
+
+    事实盲区（canary_017~019，Phase 4 发现）：fact 维只查「候选是否保留 reference
+    的锚点 + 数字是否冲突」，对「凭空编造素材外出处」（伪典籍《…有云》、伪名人
+    曾说/点评）恒给满分——编造内容与 reference 零冲突、也不影响锚点命中。
+
+    检测两类模式，出处（书名/ attributed 名）必须【不出现在 target】才算捏造
+    （target 里本来就有的典籍/人物引用是合法复现，不罚）：
+      1. 书名号引用：《X》有云/记载 —— X ∉ target
+      2. 名人引语：XX 曾说/曾经说过/有云/名言/教导/点评过 —— 名字 ∉ target
+         （名字含代词「你我他她」的不算引用源，防误伤普通对白归属）
+    """
+    hits: list[str] = []
+    for m in _CITE_BOOK_RE.finditer(cand):
+        title = m.group(1).strip()
+        if title and title not in target and m.group(0) not in target:
+            hits.append("book:" + title)
+    for m in _CITE_VERB_RE.finditer(cand):
+        src = m.group(1)
+        if src in target:
+            continue
+        if any(ch in _CITE_PRONOUNS for ch in src):
+            continue
+        hits.append("attr:" + src)
+    return hits
+
+
 def factual_consistency_score(
     candidate: str,
     target: str,
@@ -442,6 +502,20 @@ def factual_consistency_score(
         key_details = extract_key_details(target)
     cand = normalize_text(candidate or "")
 
+    # v5.22（Phase 2-full 旋钮，scorer_params 可训练，默认 0=恒等）：
+    # 候选出现与数字锚点【同单位异值】的数字 → 该锚点贡献减 pen×weight（可负，clamp 0）。
+    # 攻击场景（canary_009）：正文偷换「三千两→五万两」，同时在别处回声正确数字
+    # （“他记得很清楚，是三千两”）骗过子串存在性检查——纯命中检测抓不住偷换。
+    from . import scorer_params as _sp
+    pen = float(_sp.get_weight("v522_fact_conflict_pen", 0.0))
+    cand_nums = _scan_all_numbers(cand) if pen > 0 else []
+    # v5.22 v4（Phase 4 旋钮，scorer_params 可训练，默认 0=恒等）：
+    # 候选出现素材外出处引用（伪典籍/伪名人引语）→ 每处减 fab×2.0（≈对白锚权重）。
+    # 攻击场景（canary_019）：叙事完全成立、锚点全命中，仅靠插入《九霄玄鉴》有云、
+    # 「鲁迅先生也曾点评过」等编造出处骗取信息可信感——锚点检测天然抓不住。
+    fab = float(_sp.get_weight("v522_fact_fabricate_pen", 0.0))
+    fab_hits = _scan_fabricated_citations(cand, normalize_text(target or "")) if fab > 0 else []
+
     chars = key_details.get("characters", [])
     nums = key_details.get("numbers", [])
     dias = key_details.get("dialogues", [])
@@ -464,7 +538,13 @@ def factual_consistency_score(
             w_num_lo if num.get("unit", "") in _MONEY_UNITS or num.get("unit", "") in _TIME_UNITS
             else 2.0)
         m = num["text"] in cand
-        detail_results.append({"type": "number", "text": num["text"], "weight": w, "matched": m})
+        conflict = bool(cand_nums) and any(
+            c["unit"] == num.get("unit", "")
+            and abs(c["value"] - num.get("value", 0)) >= 1e-6
+            and c["text"] != num["text"]
+            for c in cand_nums)
+        detail_results.append({"type": "number", "text": num["text"], "weight": w,
+                               "matched": m, "conflict": conflict})
         total += w
 
     for q in dias:
@@ -479,7 +559,14 @@ def factual_consistency_score(
         total += w_obj
 
     matched = sum(d["weight"] for d in detail_results if d["matched"])
-    score = round(matched / total, 4) if total > 0 else 1.0
+    if pen > 0:
+        matched -= pen * sum(d["weight"] for d in detail_results if d.get("conflict"))
+    if fab_hits:
+        matched -= fab * 2.0 * len(fab_hits)
+        for h in fab_hits:  # 明细落盘（不计入 total，纯惩罚项）
+            detail_results.append({"type": "fabricated_citation", "text": h,
+                                   "weight": fab * 2.0, "matched": False, "penalty": True})
+    score = round(max(0.0, min(1.0, matched / total)), 4) if total > 0 else 1.0
 
     return {
         "score": score,

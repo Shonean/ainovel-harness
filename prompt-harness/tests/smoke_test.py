@@ -333,8 +333,8 @@ def test_diff_analyzer() -> None:
     _ok(f"Case 2: AI 味检测 → {len(ai_errors)} 个 AI_SMELL [PASS]")
 
     # Case 3: 内容编造检测
-    target3 = "林川蹲在墙根下，手里捏着匕首。"
-    generated3 = "林川蹲在墙根下，赵四从门外走来，手里捏着匕首。"
+    target3 = "陈迹蹲在墙根下，手里捏着匕首。"
+    generated3 = "陈迹蹲在墙根下，赵四从门外走来，手里捏着匕首。"
     report3 = diff_analyze(generated3, target3, similarity=0.6, length_diff=0.1)
     fab_errors = [e for e in report3.errors if e.category == ErrorCategory.CONTENT_FABRICATION]
     _info(f"Case 3: 编造检测 → {len(fab_errors)} 个 fabrication")

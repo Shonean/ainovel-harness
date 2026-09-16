@@ -7,7 +7,7 @@ from data_modules.projections import EventProjectionRouter
 def test_router_maps_power_breakthrough_to_state_and_memory():
     router = EventProjectionRouter()
     targets = router.route(
-        {"event_type": "power_breakthrough", "subject": "linyue", "payload": {}}
+        {"event_type": "power_breakthrough", "subject": "xiaoyan", "payload": {}}
     )
     assert targets == ["state", "memory", "vector"]
 
@@ -17,8 +17,8 @@ def test_router_maps_relationship_changed_to_index():
     targets = router.route(
         {
             "event_type": "relationship_changed",
-            "subject": "linyue",
-            "payload": {"to": "laoyaoshi"},
+            "subject": "xiaoyan",
+            "payload": {"to": "yaolao"},
         }
     )
     assert "index" in targets
@@ -41,11 +41,11 @@ def test_router_collects_required_writers_from_commit_payload():
     targets = router.required_writers(
         {
             "accepted_events": [
-                {"event_type": "power_breakthrough", "subject": "linyue", "payload": {}},
+                {"event_type": "power_breakthrough", "subject": "xiaoyan", "payload": {}},
                 {
                     "event_type": "relationship_changed",
-                    "subject": "linyue",
-                    "payload": {"to": "laoyaoshi"},
+                    "subject": "xiaoyan",
+                    "payload": {"to": "yaolao"},
                 },
             ],
             "summary_text": "本章摘要",
@@ -57,7 +57,7 @@ def test_router_collects_required_writers_from_commit_payload():
 def test_router_maps_power_breakthrough_to_state_memory_vector():
     router = EventProjectionRouter()
     targets = router.route(
-        {"event_type": "power_breakthrough", "subject": "linyue", "payload": {}}
+        {"event_type": "power_breakthrough", "subject": "xiaoyan", "payload": {}}
     )
     assert "vector" in targets
     assert "state" in targets
@@ -67,7 +67,7 @@ def test_router_maps_power_breakthrough_to_state_memory_vector():
 def test_router_maps_relationship_changed_to_index_and_vector():
     router = EventProjectionRouter()
     targets = router.route(
-        {"event_type": "relationship_changed", "subject": "linyue", "payload": {}}
+        {"event_type": "relationship_changed", "subject": "xiaoyan", "payload": {}}
     )
     assert "index" in targets
     assert "vector" in targets
@@ -78,7 +78,7 @@ def test_required_writers_includes_vector_for_key_events():
     payload = {
         "meta": {"status": "accepted", "chapter": 5},
         "accepted_events": [
-            {"event_type": "power_breakthrough", "subject": "linyue", "payload": {}},
+            {"event_type": "power_breakthrough", "subject": "xiaoyan", "payload": {}},
         ],
         "entity_deltas": [],
         "summary_text": "摘要",

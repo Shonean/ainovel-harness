@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { fetchProjects, switchProject, initializeProject, deleteProject } from '../api.js'
+import { fetchProjects, switchProject, initializeProject, deleteProject, fetchAdaptationOverview } from '../api.js'
 import ProjectCard from '../components/ProjectCard.jsx'
+import PromptModal, { askText } from '../components/PromptModal.jsx'
+import ModePickerModal from '../components/ModePickerModal.jsx'
 
 const SKELETON_COUNT = 4
 
@@ -48,6 +50,15 @@ export default function ProjectSelectPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [switchingRoot, setSwitchingRoot] = useState(null)
+    const [modePickerOpen, setModePickerOpen] = useState(false)
+    const [adapt, setAdapt] = useState(null)
+
+    useEffect(() => {
+        // 改编中心总览（容错：失败不阻断书架）
+        fetchAdaptationOverview()
+            .then(r => setAdapt(r || null))
+            .catch(() => setAdapt(null))
+    }, [])
 
     const load = useCallback(() => {
         setLoading(true)
@@ -70,15 +81,31 @@ export default function ProjectSelectPage() {
         setSwitchingRoot(project.project_root)
         try {
             await switchProject(project.project_root)
-            // 直接跳转工作台（初始化助手已集成到工作台创作助手模块）
-            navigate('/ai-creation', { replace: true })
+            // 量产书直接进量产工作台（路线图/生产线）；精品书进完整工作台
+            if (project.book_mode === 'mass') {
+                navigate('/mass', { replace: true })
+            } else {
+                navigate('/ai-creation', { replace: true })
+            }
         } catch (e) {
             alert(`切换项目失败: ${e.message}`)
             setSwitchingRoot(null)
         }
     }, [navigate, switchingRoot])
 
-    const handleCreate = useCallback(() => navigate('/create-book'), [navigate])
+    const handleAdapt = useCallback(async (project, kind) => {
+        if (switchingRoot) return
+        try { await switchProject(project.project_root) } catch { /* 切换失败也继续导航 */ }
+        if (kind === 'drama') navigate('/ai-creation?tab=adapt')
+        else navigate('/adaptation')
+    }, [navigate, switchingRoot])
+
+    const handleCreate = useCallback(() => setModePickerOpen(true), [])
+
+    const handlePickMode = useCallback((mode) => {
+        setModePickerOpen(false)
+        navigate(`/create-book?mode=${mode === 'mass' ? 'mass' : 'premium'}`)
+    }, [navigate])
 
     const handleInitialize = useCallback(async (project) => {
         const confirmed = window.confirm(
@@ -87,7 +114,7 @@ export default function ProjectSelectPage() {
             `只保留设定集和项目配置。\n\n此操作不可恢复！`
         )
         if (!confirmed) return
-        const nameConfirm = window.prompt(`请输入书名「${project.name}」以确认初始化：`)
+        const nameConfirm = await askText(`请输入书名「${project.name}」以确认初始化：`)
         if (nameConfirm !== project.name) {
             if (nameConfirm !== null) alert('书名不匹配，已取消初始化。')
             return
@@ -108,7 +135,7 @@ export default function ProjectSelectPage() {
             `此操作不可恢复！`
         )
         if (!confirmed) return
-        const nameConfirm = window.prompt(`请输入书名「${project.name}」以确认删除：`)
+        const nameConfirm = await askText(`请输入书名「${project.name}」以确认删除：`)
         if (nameConfirm !== project.name) {
             if (nameConfirm !== null) alert('书名不匹配，已取消删除。')
             return
@@ -131,6 +158,7 @@ export default function ProjectSelectPage() {
                 <div className="project-select-actions">
                     <button className="btn btn-blue" onClick={handleCreate}>＋ 新建书</button>
                     <button className="btn btn-purple" onClick={() => navigate('/ai-creation')}>AI 创作</button>
+                    <button className="btn btn-purple" onClick={() => navigate('/adaptation')}>改编中心</button>
                     <button className="btn btn-purple" onClick={() => navigate('/prompt-harness')}>Prompt Harness</button>
                     <button className="btn btn-purple" onClick={() => navigate('/api-presets')}>API 预设</button>
                 </div>
@@ -175,6 +203,13 @@ export default function ProjectSelectPage() {
                                     <div className="stat-ed"><div className="sl">总章数</div><div className="sv">{totCh}</div><div className="ss">已落盘</div></div>
                                     <div className="stat-ed"><div className="sl">总字数</div><div className="sv">{(totW / 10000).toFixed(1)}万</div><div className="ss">估算</div></div>
                                     <div className="stat-ed"><div className="sl">平均意图</div><div className="sv acc">{avg}</div><div className="ss">{scored.length} 本有评分</div></div>
+                                    {/* 改编产能（T35：数据源 /api/adaptation/overview，失败时隐藏） */}
+                                    {adapt?.totals && (
+                                        <>
+                                            <div className="stat-ed"><div className="sl">改编 Pack</div><div className="sv">{adapt.totals.packs}</div><div className="ss">{adapt.totals.ok} 可用</div></div>
+                                            <div className="stat-ed"><div className="sl">成品</div><div className="sv">{adapt.totals.drama_videos} / 0</div><div className="ss">漫剧 / 游戏</div></div>
+                                        </>
+                                    )}
                                 </div>
                             )
                         })()}
@@ -192,6 +227,7 @@ export default function ProjectSelectPage() {
                                     onClick={() => handleSelect(p)}
                                     onInitialize={handleInitialize}
                                     onDelete={handleDelete}
+                                    onAdapt={handleAdapt}
                                 />
                             ))}
                         </div>
@@ -238,6 +274,13 @@ export default function ProjectSelectPage() {
             <footer className="project-select-footer">
                 <span>AInovel Harness v6.7.2</span>
             </footer>
+            {/* Electron 无 window.prompt：文本输入弹窗统一走 PromptModal */}
+            <PromptModal />
+            <ModePickerModal
+                open={modePickerOpen}
+                onPick={handlePickMode}
+                onClose={() => setModePickerOpen(false)}
+            />
         </div>
     )
 }

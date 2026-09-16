@@ -1,0 +1,15 @@
+{
+  "locations": [
+    { "id": "loc_classroom", "name": "纸人教室", "source_element": "e1", "description": "荒废的初二（3）班教室，每个座位上坐着一个纸人。" },
+    { "id": "loc_hallway", "name": "黄昏走廊", "source_element": "e4", "description": "教学楼三层走廊，尽头堆着废弃课桌。" }
+  ],
+  "items": [
+    { "id": "item_card", "name": "病人卡", "source_element": "e6", "description": "一张住院登记卡，姓名栏写着陈守念。" }
+  ],
+  "settings": [
+    { "id": "set_loop", "name": "时间循环", "source_element": "e2", "description": "晚自习结束铃声每次响起，教室都会重置。" }
+  ],
+  "terms": [
+    { "id": "term_paper_man", "name": "纸人", "source_element": "e3", "description": "座位上的白色纸人，会随铃声转头。" }
+  ]
+}

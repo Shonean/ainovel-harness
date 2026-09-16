@@ -11,6 +11,7 @@ import {
 import InitAssistantProgress from '../components/InitAssistantProgress.jsx'
 import ChatWindow from '../components/ChatWindow.jsx'
 import { useElements, ElementsPanelContent } from '../components/ElementsPanel.jsx'
+import MassCreateFlow from './MassCreateFlow.jsx'
 
 const welcomeMessage = {
   role: 'assistant',
@@ -65,6 +66,18 @@ function createDefaultSession() {
 }
 
 export default function CreateBookPage() {
+    const [searchParams] = useSearchParams()
+    const existingBookRoot = searchParams.get('bookRoot') || ''
+    const mode = searchParams.get('mode') === 'mass' ? 'mass' : 'premium'
+
+    // 量产快速流程（P2）：表单 → 卡片确认 → 工作台；精品路径保持原对话式初始化
+    if (mode === 'mass' && !existingBookRoot) {
+        return <MassCreateFlow />
+    }
+    return <PremiumCreateFlow />
+}
+
+function PremiumCreateFlow() {
     const navigate = useNavigate()
     const [searchParams] = useSearchParams()
     const existingBookRoot = searchParams.get('bookRoot') || ''
@@ -347,7 +360,7 @@ export default function CreateBookPage() {
                 project: { title: name || '未命名书', genre: '', target_words: 0, target_chapters: 0, one_liner: '', core_conflict: '', target_reader: '', platform: '' },
                 protagonist: {}, relationship: {}, golden_finger: {}, world: {},
                 constraints: { hard_constraints: [] },
-            }, null, null, true)
+            }, null, null, true, 'premium')
             if (!res?.project_root) throw new Error('建书失败：未返回书目录')
             setBookRoot(res.project_root)
             setBookName(res.name || name)

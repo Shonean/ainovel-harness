@@ -46,16 +46,16 @@ python -X utf8 "${SCRIPTS_DIR}/ainovel.py" --project-root "{project_root}" chapt
 ---
 chapter: 0099
 time: "前一夜"
-location: "林越房间"
-characters: ["林越", "药师"]
-state_changes: ["林越: 武者9层→准备突破"]
+location: "萧炎房间"
+characters: ["萧炎", "药老"]
+state_changes: ["萧炎: 斗者9层→准备突破"]
 hook_type: "危机钩"
 hook_strength: "strong"
 ---
 ## 剧情摘要
 {100-150字}
 ## 伏笔
-- [埋设] 出师之约提及
+- [埋设] 三年之约提及
 ## 承接点
 {30字}
 ```
@@ -69,7 +69,7 @@ hook_strength: "strong"
 ## 4. 输入
 
 ```json
-{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "project_root": "D:/wk/示例项目"}
+{"chapter": 100, "chapter_file": "正文/第0100章-标题.md", "project_root": "D:/wk/斗破苍穹"}
 ```
 
 ## 5. 边界
@@ -87,13 +87,13 @@ hook_strength: "strong"
 
 ```json
 {
-  "entities_appeared": [{"id": "linyue", "type": "角色", "mentions": ["林越"], "confidence": 0.95}],
+  "entities_appeared": [{"id": "xiaoyan", "type": "角色", "mentions": ["萧炎"], "confidence": 0.95}],
   "entities_new": [{"suggested_id": "hongyi_girl", "name": "红衣女子", "type": "角色", "tier": "装饰"}],
-  "state_deltas": [{"entity_id": "linyue", "field": "realm", "old": "武者", "new": "武师"}],
+  "state_deltas": [{"entity_id": "xiaoyan", "field": "realm", "old": "斗者", "new": "斗师"}],
   "entity_deltas": [{"entity_id": "hongyi_girl", "action": "upsert", "entity_type": "角色", "tier": "装饰", "payload": {"name": "红衣女子"}}],
-  "accepted_events": [{"event_id": "evt-ch100-001", "chapter": 100, "event_type": "open_loop_created", "subject": "three_year_promise", "payload": {"content": "出师之约提及"}}],
+  "accepted_events": [{"event_id": "evt-ch100-001", "chapter": 100, "event_type": "open_loop_created", "subject": "three_year_promise", "payload": {"content": "三年之约提及"}}],
   "summary_text": "摘要",
-  "scenes": [{"index": 1, "start_line": 1, "end_line": 30, "location": "林越房间", "summary": "药师提醒出师之约", "characters": ["linyue", "laoyaoshi"]}],
+  "scenes": [{"index": 1, "start_line": 1, "end_line": 30, "location": "萧炎房间", "summary": "药老提醒三年之约", "characters": ["xiaoyan", "yaolao"]}],
   "scenes_chunked": 4,
   "dominant_strand": "quest",
   "timing_ms": {},

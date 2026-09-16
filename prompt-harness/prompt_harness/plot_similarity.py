@@ -467,9 +467,23 @@ async def plot_similarity(
                 "turn_recall": round(turn_recall, 4), "n_target_turns": n_target,
                 "n_gen_turns": len(gen_turns), "n_beats": len(segments),
                 "n_gen": len(gen_embs)}
-    beat_mean = sum(scores) / len(scores)
-    plot = round((1.0 - w_turn) * beat_mean + w_turn * turn_fid, 4)
     coverage = round(sum(1 for s in scores if s >= 0.50) / len(scores), 4)
+    # v5.22（Phase 2-full 旋钮，scorer_params 可训练，默认恒等）：
+    # - plot_floor：beat 裸余弦铰链 clamp((c-floor)/(1-floor), 0, 1)——同域中文裸余弦
+    #   宽厚（跑题/零情节/堆对白/换皮都蹭 0.7+），floor 以上才线性保留、以下归零
+    #   （Phase 2-full 网格最优 0.9）。
+    # - plot_turn_empty_neutral：target 无对白轮时 turn 保真恒 1.0，会把 w_turn 白送进
+    #   plot（canary_013/014 垫分路径）；置 1 时该项中性剔除（plot=beat 项）。
+    from . import scorer_params as _sp
+    floor = float(_sp.get_weight("v522_plot_floor", 0.0))
+    empty_neutral = float(_sp.get_weight("v522_plot_turn_empty_neutral", 0.0)) >= 1.0
+    if floor > 0.0:
+        scores = [max(0.0, min(1.0, (c - floor) / (1.0 - floor))) for c in scores]
+    beat_mean = sum(scores) / len(scores)
+    if empty_neutral and n_target == 0:
+        plot = round(beat_mean, 4)
+    else:
+        plot = round((1.0 - w_turn) * beat_mean + w_turn * turn_fid, 4)
     return {"plot": plot, "coverage": coverage, "turn_fidelity": round(turn_fid, 4),
             "turn_recall": round(turn_recall, 4), "n_target_turns": n_target,
             "n_gen_turns": len(gen_turns), "n_beats": len(segments),

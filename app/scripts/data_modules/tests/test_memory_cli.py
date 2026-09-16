@@ -69,21 +69,21 @@ def test_query_entity_found(tmp_path, capsys):
     state = {
         "entities_v3": {
             "角色": {
-                "linyue": {"name": "林越", "tier": "核心", "aliases": [], "first_appearance": 1, "last_appearance": 10}
+                "xiaoyan": {"name": "萧炎", "tier": "核心", "aliases": [], "first_appearance": 1, "last_appearance": 10}
             }
         }
     }
     (project / ".ainovel" / "state.json").write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
     old_argv = sys.argv
-    sys.argv = ["memory_cli", "--project-root", str(project), "query-entity", "--id", "linyue"]
+    sys.argv = ["memory_cli", "--project-root", str(project), "query-entity", "--id", "xiaoyan"]
     try:
         memory_cli.main()
     finally:
         sys.argv = old_argv
 
     output = json.loads(capsys.readouterr().out)
-    assert output["name"] == "林越"
+    assert output["name"] == "萧炎"
 
 
 def test_query_rules_empty(tmp_path, capsys):

@@ -34,8 +34,14 @@ function VersionWatcher() {
 const ProjectSelectPage = lazy(() => import('./pages/ProjectSelectPage.jsx'))
 const CreateBookPage = lazy(() => import('./pages/CreateBookPage.jsx'))
 const AICreationPage = lazy(() => import('./pages/AICreationPage.jsx'))
+const MassWorkspacePage = lazy(() => import('./pages/MassWorkspacePage.jsx'))
 const PromptHarnessPage = lazy(() => import('./pages/PromptHarnessPage.jsx'))
 const ApiPresetsPage = lazy(() => import('./pages/ApiPresetsPage.jsx'))
+const AdaptationHubPage = lazy(() => import('./pages/AdaptationHubPage.jsx'))
+const DramaWorkbenchPage = lazy(() => import('./pages/DramaWorkbenchPage.jsx'))
+const FilmManagerPage = lazy(() => import('./pages/FilmManagerPage.jsx'))
+const PublishPage = lazy(() => import('./pages/PublishPage.jsx'))
+const BatchPage = lazy(() => import('./pages/BatchPage.jsx'))
 
 function LoadingScreen() {
     return (
@@ -97,6 +103,14 @@ ReactDOM.createRoot(document.getElementById('root')).render(
                     {/** 启动流程：项目库 + 全屏向导 */}
                     <Route path="/" element={<ProjectSelectPage />} />
                     <Route path="/create-book" element={<CreateBookPage />} />
+                    {/** 改编中心（T36 v9 漫剧线）：书墙 / 漫剧工作台 / 成片 / 发布 / 批量 */}
+                    <Route path="/adaptation" element={<AdaptationHubPage />} />
+                    <Route path="/adaptation/workbench" element={<DramaWorkbenchPage />} />
+                    <Route path="/adaptation/films" element={<FilmManagerPage />} />
+                    <Route path="/adaptation/publish" element={<PublishPage />} />
+                    <Route path="/adaptation/batch" element={<BatchPage />} />
+                    {/** 量产工作台：生产线/路线图/章节/设置 */}
+                    <Route path="/mass" element={<MassWorkspacePage />} />
 
                     {/** 旧路径兼容：统一走 AI 创作工作台 */}
                     <Route path="/create-test-book" element={<Navigate to="/create-book" replace />} />

@@ -1,0 +1,5 @@
+node_modules/
+release/
+renderer/dist/
+renderer/node_modules/
+*.log

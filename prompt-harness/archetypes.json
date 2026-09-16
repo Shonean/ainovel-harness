@@ -1,0 +1,167 @@
+{
+  "root": "玄幻武侠",
+  "created_at": "2026-08-07T04:38:03.515978+00:00",
+  "archetypes": [
+    {
+      "name": "拜师学艺",
+      "definition": "主角拜入师门、习武/修仙入门阶段",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "宗门考核",
+      "definition": "通过宗门/门派的选拔考核",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "比武招亲",
+      "definition": "通过比试武艺招亲或争夺伴侣",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "擂台比试",
+      "definition": "公开擂台/斗场分胜负",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "秘境探险",
+      "definition": "进入秘境/禁地探险寻机缘",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "寻宝夺宝",
+      "definition": "追寻或争夺宝物/功法/丹药",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "监狱救人",
+      "definition": "闯入牢狱救出被囚之人",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "追杀逃亡",
+      "definition": "被追捕、一路逃亡避祸",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "伏击围杀",
+      "definition": "设伏或遭伏击围困厮杀",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "朝堂争斗",
+      "definition": "朝堂/官场派系权谋争斗",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "家族夺权",
+      "definition": "家族内部争权夺位",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "退婚打脸",
+      "definition": "被退婚/羞辱后打脸翻盘",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "装逼打脸",
+      "definition": "低调扮猪吃虎后扬眉吐气",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "身世揭秘",
+      "definition": "主角真实身世/来历被揭示",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "认祖归宗",
+      "definition": "找回血脉宗族、认祖归宗",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "报仇雪恨",
+      "definition": "为仇恨讨回公道、手刃仇敌",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "师徒对决",
+      "definition": "师徒反目或切磋对决",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "感情告白",
+      "definition": "男女主感情升温/表明心迹",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "结盟谈判",
+      "definition": "多方势力谈判结盟或讲条件",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "背叛反水",
+      "definition": "盟友/下属背叛或反水",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "揭穿阴谋",
+      "definition": "查明并揭穿幕后阴谋黑手",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "突破奇遇",
+      "definition": "主角获得机缘、突破境界",
+      "parent": "",
+      "label": true,
+      "beats": []
+    },
+    {
+      "name": "决战终章",
+      "definition": "全书/大卷末高潮决战收束",
+      "parent": "",
+      "label": true,
+      "beats": []
+    }
+  ]
+}

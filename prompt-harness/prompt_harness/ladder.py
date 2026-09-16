@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """v5.32 生成阶梯（剧情推导重构第一步）：场景级正文生成。
 
-解决「极简→推导树→正文」整章一次性生成只有 ~833 字（《示例书》原文每章实测
+解决「极简→推导树→正文」整章一次性生成只有 ~833 字（《青山》原文每章实测
 2600-3100 字）的问题：把最后一级「场景分解(1234)→正文(12345)」从整章一次
 生成改为**逐场景生成**——每场景写足 ~N 字 + 长度不足重生成 + 拼接 + 整章
 AI 味审阅循环。中间层级（弧线/章/场景）复用现有 derive 展开，本模块只管
@@ -21,6 +21,7 @@ from typing import Any, Callable
 from .ai_flavor import ai_flavor_ban_block, build_ai_flavor_feedback, to_dialogue_quotes
 from .ai_flavor import paragraph_open_diversity_detector, overdetail_detector, punct_detector
 from .optimizer import forward_generation_v4
+from .runtime_flags import is_fast as _runtime_is_fast
 
 # 6 类叶子字段与标签（与 derive._LEAF_FIELDS 一致；environment 是单串，其余是 list）
 _LEAF_LABELS = (
@@ -266,15 +267,15 @@ def build_scene_prompt(
         "过程性动作、环境、物件细节是过场，**合计不超过本场景篇幅的 1/3**，"
         "绝不靠它们凑字数。\n"
         "- 逐条落实素材：对白用“”引号、严格按序出现；冲突要有来有往的回合；"
-        "**说话动词/神态逐轮采用素材原词**（素材写『王慧兰阴阳怪气道』『陈硕得意洋洋』"
-        "『王慧兰喜滋滋的挽住陈硕胳膊』就照用），"
+        "**说话动词/神态逐轮采用素材原词**（素材写『王慧玲阴阳怪气道』『陈硕得意洋洋』"
+        "『王慧玲喜滋滋的挽住陈硕胳膊』就照用），"
         "**禁止把多轮对白的说话动词统一占位成『开口说』『说道』『说』**，"
         "相邻对白轮不得重复同一说话动词；"
         "关键动作（推动剧情/人物冲突/引出对白的）展开写，**过程性动作（翻找/收拾/走路/开门）"
         "用一句话概括带过，不得逐微动作平铺成流水账**（如『把能翻的地方都翻遍了，什么也没找到』，"
         "不要『拉开抽屉→翻床底→摸床垫缝→开衣柜』逐条写）。\n"
         "- **素材里已是具体描述的（动作/环境/细节含物品、数字、称呼、原句），正文尽量原样采用这些措辞**"
-        "（如素材写『林川上周刚换锁时贴的小标签』，正文就用这个说法），不要改写成别的表述；对白按契约原话。\n"
+        "（如素材写『陈迹上周刚换锁时贴的小标签』，正文就用这个说法），不要改写成别的表述；对白按契约原话。\n"
         f"{verbatim_hint}\n"
         "- **叙述克制**：复述素材时直接呈现动作与对白，不要补心理注释/动机分析/情绪说明"
         "（不写『她心里不满…只觉得…说不出的…』『他心里咯噔一下』这类内心补白），"
@@ -296,7 +297,7 @@ def build_scene_prompt(
         "对白里自然的来回问答不算复述。\n"
         f"- {prev_hint}\n"
         "- 不要添加素材之外的主要情节；**不得虚构素材之外的人物身份/职业/背景/来历**"
-        "（素材说林川是学生、被送进精神病院，就写学生/病人；不要脑补『跑去医院当全职医生』"
+        "（素材说陈迹是学生、被送进精神病院，就写学生/病人；不要脑补『跑去医院当全职医生』"
         "『白大褂』这类素材没有的设定）。\n"
         "- **具体设定宁缺毋错**：素材没写明的官职级别/案发经过细节/人物出身来历，正文不得自行补全"
         "（素材写『二叔是御刀卫七品绿袍』就写七品绿袍，不得改成『御前金吾卫千户』；"
@@ -457,6 +458,12 @@ async def generate_chapter_prose(
     from .ai_flavor import review_ai_flavor, review_ai_flavor_standalone
     from .config import SETTINGS as _s
 
+    # 【T32 P4】量产 fast：审计重试与整章重生成降为 0 轮（默认行为不变）
+    _fast = _runtime_is_fast()
+    if _fast:
+        retry_cap = 0
+    audit_attempts = 1 if _fast else 3
+
     if threshold is None:
         threshold = float(getattr(_s, "derive_ai_flavor_threshold", 0.70))
     scenes_in = [s for s in (scenes or []) if isinstance(s, dict)]
@@ -580,7 +587,7 @@ async def generate_chapter_prose(
             tgt = _adaptive_target_len(
                 sc, cap=max(300, target_len_per_scene * 2), fixed=_fixed)
             strikes = StrikeCounter(cap=3)
-            for _try in range(3):
+            for _try in range(audit_attempts):
                 aud = audit_l5(blk["text"], sc, kd=kd, target_len=tgt)
                 if aud["ok"]:
                     break
@@ -766,7 +773,7 @@ async def _extract_scenes_pass(
           "narration 原文叙述原句 / psychologies 心理 / conflicts 冲突 / details 细节。"
         + f"动作/心理/冲突/细节各 {density} 条；"
           "**对话 dialogues：列出该场景出现的全部引号轮次**（角色对白保留原话带说话人，"
-          "**含说话动词与神态——如『王慧兰阴阳怪气道』『陈硕得意洋洋』『王慧兰喜滋滋的挽住陈硕胳膊』"
+          "**含说话动词与神态——如『王慧玲阴阳怪气道』『陈硕得意洋洋』『王慧玲喜滋滋的挽住陈硕胳膊』"
           "『道了一声晦气』『撇嘴』『挠挠头皮』，逐轮原样保留原文对「说话人+动词/神态」的写法，"
           "不要只留说话人名**；"
           "含门牌/奖状/牌匾等原文引号内容，只要原文用了引号就原样列出），不要按条数截断、不要遗漏任何一轮。"
@@ -826,7 +833,7 @@ async def extract_chapter_scenes(
     这是解决「从极简凭空生成的树不承载原文保真」的关键：中间层从原文提取。
 
     【v7.8.1 修复】原实现 `len(src)>6000 时 src=src[:6000]` 会把超长章截断丢掉
-    后半内容（书D 501-955 约 20% 章超 6000 字，len_ratio/s_char 被系统性拖垮）。
+    后半内容（大奉 501-955 约 20% 章超 6000 字，len_ratio/s_char 被系统性拖垮）。
     改为：超长章**分段提取**（每段 ~6000 字），各段场景合并后统一加段前缀防重名。
 
     Returns: list[scene dict]。失败 raise（调用方降级）。
@@ -944,7 +951,7 @@ async def build_ladder(
 async def extract_key_facts(minimal: str) -> list[str]:
     """从极简剧情提取「不可变关键事实」：人物全名/地点/标志性物品/关键事件。
 
-    前向推回时这些事实必须原样贯穿每一级（防改名/防丢失——实测极简里的 王慧兰
+    前向推回时这些事实必须原样贯穿每一级（防改名/防丢失——实测极简里的 王慧玲
     在弧线概要生成时被 LLM 改成 张兰，中央花园33栋/录取通知书/遗像全丢）。
     """
     from .derive import _tree_llm
@@ -1010,7 +1017,7 @@ async def expand_ladder(
     每级以上一级为 spec 生成，不使用提取的阶梯（提取阶梯仅用于对比/校验）。
 
     【反漂移】从极简提取关键事实清单，贯穿每一级展开（人物名/地点/物品不得改名丢失）——
-    实测纯前向会丢事实/改人名（王慧兰→张兰），关键事实块是修复。
+    实测纯前向会丢事实/改人名（王慧玲→张兰），关键事实块是修复。
 
     【v5.32.2 真实阶梯范例注入】exemplars：同原型真实弧线的阶梯（l2_arc/l3_chapter/l4_scenes），
     注入各级展开 prompt 作 few-shot 结构参考（提升详细程度/结构保真，内容仍是自己的剧情）。
@@ -1022,7 +1029,7 @@ async def expand_ladder(
     facts = await extract_key_facts(l1_minimal)
     facts_block = (
         "【关键事实·不可变】以下事实必须原样保留在后续每一级展开与正文里："
-        "人物不得改名（如 王慧兰 不能写成 张兰），地点/物品/数字/事件不得丢失。\n"
+        "人物不得改名（如 王慧玲 不能写成 张兰），地点/物品/数字/事件不得丢失。\n"
         + "；".join(facts)
     ) if facts else ""
     ex2 = _exemplar_block(exemplars, 2)
@@ -1104,8 +1111,8 @@ async def expand_ladder(
     }
 
 
-_FACT_NAMES = ("林川", "陈硕", "王慧兰", "袍哥", "二刀", "老刘")
-_FACT_LOCS = ("中央花园33栋", "城西精神病院", "洛城")
+_FACT_NAMES = ("陈迹", "陈硕", "王慧玲", "袍哥", "二刀", "老刘")
+_FACT_LOCS = ("中央花园33栋", "青山精神病院", "洛城")
 _FACT_ITEMS = ("录取通知书", "诊断书", "房本", "黄金", "遗像", "荣誉证书", "奖状")
 
 
@@ -1199,8 +1206,8 @@ async def verify_ladder(
     scenes = ladder.get("l4_scenes") or []
     if not scenes:
         return {"error": "无场景", "ok": False}
-    # 【v5.32.3】把 L2 弧线概要也注入生成上下文（含「林川在城西精神病院」等事实锚点）：
-    # 只传 L3 core 时生成端缺「林川是被送进精神病院的病人/学生」事实，会脑补「当全职医生」。
+    # 【v5.32.3】把 L2 弧线概要也注入生成上下文（含「陈迹在青山精神病院」等事实锚点）：
+    # 只传 L3 core 时生成端缺「陈迹是被送进精神病院的病人/学生」事实，会脑补「当全职医生」。
     l2 = str((ladder.get("l2_arc") or "") or "").strip()
     core0 = str((ladder.get("l3_chapter") or {}).get("core") or "").strip()
     core = (core0 + (("\n【弧线概要】" + l2) if l2 else "")).strip()

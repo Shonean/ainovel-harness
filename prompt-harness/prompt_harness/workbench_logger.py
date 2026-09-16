@@ -45,7 +45,7 @@ _CTX: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
 def set_workbench_ctx(**fields: Any) -> contextvars.Token:
     """设置工作台追踪上下文（返回 token，用 clear_workbench_ctx(token) 恢复）。
 
-    例：set_workbench_ctx(book="示例书", arc="第1弧", chapter=3, step="l4", run_id="r_xxx")
+    例：set_workbench_ctx(book="青山", arc="第1弧", chapter=3, step="l4", run_id="r_xxx")
     只更新传入字段，其余保持。返回 token 供 try/finally 恢复。
     """
     merged = dict(_CTX.get())

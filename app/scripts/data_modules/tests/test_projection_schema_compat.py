@@ -61,12 +61,12 @@ def test_state_writer_accepts_flat_field_legacy(tmp_path):
     writer.apply(
         {
             "meta": {"status": "accepted", "chapter": 3},
-            "state_deltas": [{"entity_id": "x", "field": "realm", "new": "武师"}],
+            "state_deltas": [{"entity_id": "x", "field": "realm", "new": "斗师"}],
         }
     )
 
     payload = json.loads((tmp_path / ".ainovel" / "state.json").read_text(encoding="utf-8"))
-    assert payload["entity_state"]["x"]["realm"] == "武师"
+    assert payload["entity_state"]["x"]["realm"] == "斗师"
 
 
 def test_state_writer_handles_array_value_in_field_path(tmp_path):

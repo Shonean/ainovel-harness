@@ -303,7 +303,7 @@ def test_route_output_includes_canonical_genre():
     )
 
     engine = StorySystemEngine(csv_dir=csv_dir)
-    route = engine._route("退婚流 出师之约", "玄幻")
+    route = engine._route("退婚流 三年之约", "玄幻")
 
     assert route["meta"]["canonical_genre"] == "玄幻"
     assert route["meta"]["genre_filter"] == "玄幻"
@@ -497,7 +497,7 @@ def test_build_uses_canonical_genre_for_reasoning_lookup():
     )
 
     engine = StorySystemEngine(csv_dir=csv_dir)
-    contract = engine.build(query="退婚流 出师之约", genre=None, chapter=1)
+    contract = engine.build(query="退婚流 三年之约", genre=None, chapter=1)
 
     assert contract["master_setting"]["route"]["canonical_genre"] == "玄幻"
     assert contract["chapter_brief"]["reasoning"]["genre"] == "玄幻"

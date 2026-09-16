@@ -24,26 +24,26 @@ def test_upsert_character_state_marks_old_outdated(tmp_path):
         id="a1",
         layer="semantic",
         category="character_state",
-        subject="linyue",
+        subject="xiaoyan",
         field="realm",
-        value="武者",
+        value="斗者",
         source_chapter=1,
     )
     item2 = MemoryItem(
         id="a2",
         layer="semantic",
         category="character_state",
-        subject="linyue",
+        subject="xiaoyan",
         field="realm",
-        value="武师",
+        value="斗师",
         source_chapter=2,
     )
     manager.upsert_item(item1)
     manager.upsert_item(item2)
-    active = manager.query(category="character_state", subject="linyue", status="active")
-    outdated = manager.query(category="character_state", subject="linyue", status="outdated")
+    active = manager.query(category="character_state", subject="xiaoyan", status="active")
+    outdated = manager.query(category="character_state", subject="xiaoyan", status="outdated")
     assert len(active) == 1
-    assert active[0].value == "武师"
+    assert active[0].value == "斗师"
     assert len(outdated) == 1
 
 

@@ -38,6 +38,8 @@ TEMPLATE_MATCH_MIN_SIM = 0.58
 _ELEMENTS_FILE = "elements.json"
 _ARCS_FILE = "arcs.json"
 
+from .book_memory import BookMemory, node_value as bm_node_value  # noqa: E402  【Phase 2】D1 三级记忆
+
 
 def _wb_ctx(book_root: str | Path, **extra: Any) -> None:
     """设置工作台日志上下文（book + 可选 arc/step/chapter）。
@@ -127,7 +129,10 @@ def save_elements(book_root: str | Path, elements: dict[str, Any]) -> None:
 # 元素单卡 CRUD（类图卡片视图用：建卡/改卡/删卡，含 fields/relations）
 # kind 短码 → 存储集合名映射
 # ════════════════════════════════════════════════════════════════════
-_KIND_TO_COLLECTION = {"c": "characters", "i": "items", "s": "settings", "l": "locations", "map": "maps"}
+# 键同时收短码（AI 工具环用）与复数全名（前端单卡 CRUD 用）
+_KIND_TO_COLLECTION = {"c": "characters", "i": "items", "s": "settings", "l": "locations", "map": "maps",
+                       "characters": "characters", "items": "items", "settings": "settings",
+                       "locations": "locations", "maps": "maps"}
 
 
 def _next_elem_id(elements: dict[str, Any], kind: str) -> str:
@@ -324,6 +329,16 @@ def save_chat_sessions(book_root: str | Path, sessions: list[dict[str, Any]]) ->
     _write_json(_dot_ainovel(book_root) / _CHAT_SESSIONS_FILE, sessions)
 
 
+def delete_chat_session(book_root: str | Path, session_id: str) -> bool:
+    """【Phase 3】删除一整段会话（按 id 移除，含全部消息）。"""
+    sessions = load_chat_sessions(book_root)
+    kept = [s for s in sessions if s.get("id") != session_id]
+    if len(kept) == len(sessions):
+        return False
+    save_chat_sessions(book_root, kept)
+    return True
+
+
 # ════════════════════════════════════════════════════════════════════
 # 书级备注系统（三级标注：全局 → 情节 → 场景 → 段级）
 # ════════════════════════════════════════════════════════════════════
@@ -372,10 +387,7 @@ def approve_pending(book_root: str | Path, pid: str, edits: dict[str, Any] | Non
             try:
                 if item.get("type") == "mem":
                     text = str(edits.get("text") or item.get("text") or "").strip()
-                    mems = load_memory(book_root)
-                    mems.insert(0, {"id": uuid.uuid4().hex[:8], "text": text,
-                                    "at": datetime.now(timezone.utc).isoformat()})
-                    save_memory(book_root, mems)
+                    add_memory(book_root, text)  # 【Phase 2】v2 写路径（语义库 user_edit）
                 else:  # card
                     add_element(
                         book_root, item.get("kind", "s"),
@@ -407,10 +419,7 @@ def approve_all_pending(book_root: str | Path) -> int:
     n = 0
     for p in list(items):
         if p.get("type") == "mem":
-            mems = load_memory(book_root)
-            mems.insert(0, {"id": uuid.uuid4().hex[:8], "text": p.get("text", ""),
-                            "at": datetime.now(timezone.utc).isoformat()})
-            save_memory(book_root, mems)
+            add_memory(book_root, str(p.get("text") or ""))  # 【Phase 2】v2 写路径
             n += 1
         else:
             try:
@@ -431,16 +440,54 @@ def reject_all_pending(book_root: str | Path) -> int:
 
 
 # ════════════════════════════════════════════════════════════════════
-# 书级记忆库（灵感对话注入）
+# 书级记忆库（D1 三级记忆 —— 实现在 book_memory.py，此处为兼容层）
+# 【2026-09-07 Phase 2】旧 memory.json 平表升级为三级记忆（经情账本/语义库/矛盾卡/
+#   工作记忆）。旧 CRUD 签名全部保留，内部走 BookMemory（落盘 .ainovel/memory_v2/）；
+#   旧文件首次访问自动迁移（幂等），此后只读。
 # ════════════════════════════════════════════════════════════════════
 _MEMORY_FILE = "memory.json"
 
 
-def load_memory(book_root: str | Path) -> list[dict[str, Any]]:
+def _bm(book_root: str | Path) -> BookMemory:
+    return BookMemory(book_root)
+
+
+def _legacy_memory_items(book_root: str | Path) -> list[dict[str, Any]]:
     return _read_json(_dot_ainovel(book_root) / _MEMORY_FILE, [])
 
 
+def _node_to_legacy(n: dict[str, Any]) -> dict[str, Any]:
+    """语义节点 → 旧平表形状（面板/前端零改动）。"""
+    chain = n.get("version_chain") or [{}]
+    ts = chain[-1].get("ts") or 0
+    scope = str(n.get("scope") or "book")
+    entity = str(n.get("entity") or "")
+    return {
+        "id": str(n.get("legacy_id") or n.get("id") or ""),
+        "node_id": n.get("id"),
+        "text": bm_node_value(n),
+        "scope": scope,
+        "arc_id": scope[4:] if scope.startswith("arc:") else "",
+        "key": "" if entity == "随记" else entity,
+        "at": datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else "",
+        "layered": bool(n.get("layered")),
+        "via": str(chain[-1].get("via") or ""),
+    }
+
+
+def load_memory(book_root: str | Path) -> list[dict[str, Any]]:
+    """兼容读取：已迁移 → 语义节点投影为旧形状；未迁移 → 先迁移再原样返回旧数据。"""
+    bm = _bm(book_root)
+    legacy = _legacy_memory_items(book_root)
+    if not bm.is_migrated():
+        bm.ensure_migrated(legacy)
+        return legacy
+    return [_node_to_legacy(n) for n in bm._load_nodes() if n.get("status") == "active"]
+
+
 def save_memory(book_root: str | Path, items: list[dict[str, Any]]) -> None:
+    """旧整表回存（签名兼容保留）：v2 起写路径全部走 add/update/delete_memory；
+    历史调用方改造后不再经此落盘。仍被调用时只写 memory.json 存档，不进 v2。"""
     _write_json(_dot_ainovel(book_root) / _MEMORY_FILE, items)
 
 
@@ -453,8 +500,8 @@ def add_memory(
     arc_id: str = "",
     tags: list[str] | None = None,
 ) -> dict[str, Any]:
-    """新增一条记忆。
-    scope: 'book'（全书） | 'arc' + arc_id（某弧） | 'element:<id>'（某元素）
+    """新增一条记忆（v2：语义库 user_edit 写入，同实体同属性不同值自动产冲突卡）。
+    scope: 'book'（全书） | 'arc' + arc_id（某弧） | 'element:<id>'（某元素） | 'session'（走工作记忆，见 add_working_memory）
     兼容旧数据：旧记录无 scope/key/tags，读取时按 scope=book 处理。
     """
     text = str(text or "").strip()
@@ -466,39 +513,31 @@ def add_memory(
         _scope = f"arc:{arc_id}"
     if _scope == "element" and key:
         _scope = f"element:{key}"
-    items = load_memory(book_root)
-    item = {
-        "id": uuid.uuid4().hex[:8],
-        "text": text,
-        "scope": _scope,
-        "key": str(key or "")[:50],
-        "arc_id": str(arc_id or ""),
-        "tags": [str(t) for t in (tags or []) if t],
-        "at": datetime.now(timezone.utc).isoformat(),
-    }
-    items.insert(0, item)
-    save_memory(book_root, items)
+    bm = _bm(book_root)
+    if not bm.is_migrated():
+        bm.ensure_migrated(_legacy_memory_items(book_root))
+    res = bm.slow_write(str(key or "")[:50] or text[:12], "value", text,
+                        via="user_edit", scope=_scope,
+                        ctx={"source": "remember", "arc_id": str(arc_id or "")})
+    item = _node_to_legacy(res["node"])
+    item["tags"] = [str(t) for t in (tags or []) if t]
+    if res.get("card"):
+        item["conflict_card"] = res["card"]["id"]
     return item
 
 
 def update_memory(book_root: str | Path, mid: str, text: str) -> bool:
-    items = load_memory(book_root)
-    for x in items:
-        if x.get("id") == mid:
-            x["text"] = str(text or "").strip()
-            save_memory(book_root, items)
-            return True
-    return False
+    """面板显式改写（v2：版本链追加 + 自动关掉该节点的 open 卡）。"""
+    bm = _bm(book_root)
+    if not bm.is_migrated():
+        bm.ensure_migrated(_legacy_memory_items(book_root))
+    n = bm.user_rewrite(mid, str(text or "").strip())
+    return n is not None
 
 
 def delete_memory(book_root: str | Path, mid: str) -> bool:
-    items = load_memory(book_root)
-    before = len(items)
-    items = [x for x in items if x.get("id") != mid]
-    if len(items) < before:
-        save_memory(book_root, items)
-        return True
-    return False
+    """删除记忆（v2：语义节点归档，账本可溯；不物理删）。"""
+    return _bm(book_root).archive_node(mid)
 
 
 def list_memory(book_root: str | Path, scope: str | None = None, *, arc_id: str = '', key: str = '') -> list[dict[str, Any]]:
@@ -535,40 +574,76 @@ def _mem_scope(m: dict[str, Any]) -> str:
 
 
 def recall_memory(book_root: str | Path, query: str, *, arc_id: str = "", top_k: int = 8) -> list[dict[str, Any]]:
-    """根据 query 关键词召回相关记忆（简单关键词匹配 + scope 加权）。
+    """根据 query 召回记忆（v2：三级检索的兼容投影——工作记忆由 arc_chat 的 mem_block
+    单独必注入，本函数只返回语义命中 + 分层并存的展开）。
     优先返回：匹配 query 关键词的 + scope 为 arc 当前弧的 + 全书的。
     """
-    items = load_memory(book_root)
-    if not items:
-        return []
-    q = str(query or "").strip()
-    q_terms = set()
-    if q:
-        # 简单切词：2 字以上的字符片段
-        for i in range(len(q) - 1):
-            q_terms.add(q[i:i+2])
-        q_terms.add(q)
-    scored: list[tuple[float, dict[str, Any]]] = []
-    arc_scope = f"arc:{arc_id}" if arc_id else ""
-    for m in items:
-        score = 0.0
-        text = str(m.get("text") or "") + " " + str(m.get("key") or "")
-        # 关键词命中
-        if q_terms:
-            hits = sum(1 for t in q_terms if t in text)
-            score += hits * 1.0
-        # scope 加权：当前弧记忆优先
-        if arc_scope and _mem_scope(m) == arc_scope:
-            score += 3.0
-        elif _mem_scope(m) == "book":
-            score += 1.0
-        # 元素记忆也有一定基础分
-        elif _mem_scope(m).startswith("element:"):
-            score += 0.5
-        if score > 0:
-            scored.append((score, m))
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [m for _, m in scored[:top_k]]
+    bm = _bm(book_root)
+    if not bm.is_migrated():
+        bm.ensure_migrated(_legacy_memory_items(book_root))
+    r = bm.recall(query, arc_id=arc_id, top_k=top_k)
+    out: list[dict[str, Any]] = []
+    for n in r["semantic"]:
+        item = _node_to_legacy(n)
+        if n.get("layered"):
+            lvs = "；".join(f"{l.get('label')}：{l.get('value')}"
+                            for l in (n.get("layer_values") or []))
+            if lvs:
+                item["text"] = f"{lvs}（分层并存）"
+        out.append(item)
+    return out
+
+
+def add_working_memory(book_root: str | Path, session_id: str, text: str,
+                       *, source: str = "user_edit") -> dict[str, Any]:
+    """单对话层：写一条本会话约束卡（每轮必注入，不参与召回）。"""
+    return _bm(book_root).add_working(session_id, text, source=source)
+
+
+def get_working_memory(book_root: str | Path, session_id: str) -> list[dict[str, Any]]:
+    return _bm(book_root).get_working(session_id)
+
+
+def delete_working_memory(book_root: str | Path, session_id: str, key: str) -> bool:
+    return _bm(book_root).remove_working(session_id, key)
+
+
+def memory_tiers(book_root: str | Path, *, arc_id: str = "", session_id: str = "") -> dict[str, Any]:
+    """三级记忆面板数据：全局（book 语义）/ 情节（arc 语义）/ 单对话（session 工作卡）
+    + 未决冲突卡 + 账本统计。"""
+    bm = _bm(book_root)
+    if not bm.is_migrated():
+        bm.ensure_migrated(_legacy_memory_items(book_root))
+    nodes = [n for n in bm._load_nodes() if n.get("status") == "active"]
+    global_items: list[dict[str, Any]] = []
+    arc_items: list[dict[str, Any]] = []
+    for n in nodes:
+        item = _node_to_legacy(n)
+        if str(item.get("scope")) == "book":
+            global_items.append(item)
+        elif str(item.get("scope")).startswith("arc:"):
+            arc_items.append(item)
+    if arc_id:  # 面板定位到某弧时，本弧的排前
+        arc_items.sort(key=lambda x: 0 if x.get("arc_id") == arc_id else 1)
+    cards = [
+        {
+            "id": c.get("id"), "entity": c.get("entity"), "attr": c.get("attr"),
+            "scope": c.get("scope"), "status": c.get("status"),
+            "old": (c.get("claim_old") or {}).get("text", ""),
+            "new": (c.get("claim_new") or {}).get("text", ""),
+            "axis": (c.get("axis_hypothesis") or {}).get("detail", ""),
+            "detected_ts": c.get("detected_ts"),
+            **({"resolution": c.get("resolution")} if c.get("resolution") else {}),
+        }
+        for c in bm.all_cards()
+    ]
+    return {
+        "global": global_items,
+        "arc": arc_items,
+        "session": bm.get_working(session_id) if session_id else [],
+        "cards": cards,
+        "stats": bm.stats(),
+    }
 
 
 def load_arcs(book_root: str | Path) -> dict[str, Any]:
@@ -908,33 +983,19 @@ def _merge_elements(existing: dict[str, Any], fresh: dict[str, Any]) -> dict[str
     return out
 
 
-async def generate_settings(
-    book_root: str | Path,
-    settings: dict[str, Any] | None = None,
-    *,
-    title: str = "",
-    genre: str = "",
+async def _propose_elements_and_tone(
+    s: dict[str, Any], title: str, genre: str,
 ) -> dict[str, Any]:
-    """生成基本设定的派生产物：elements.json（表单种子 → LLM 补全 desc/alias/terms）
-    + 设定集/*.md + style/role_setting。
+    """元素清单 + 文风基调提取（generate_settings 调用1 与 quick_init 共用）。
 
-    **可重跑**：改基本设定后再生成 → 覆盖设定集 + 更新 elements（保留用户手改条目）。
-    两次 LLM 调用：① 元素清单+基调；② 设定集 markdown 文件。
+    Returns {style, role_setting, elements}；elements 为归一化后 fresh 字典
+    （characters/items/settings，仅保留有 name 的条目）。
     """
     from .derive import _tree_llm
-
-    book_root = Path(book_root)
-    _wb_ctx(book_root, step="settings_generate")
-    s = dict(settings or load_basic_settings(book_root))
-    title = title or str(s.get("name") or "")
-    genre = genre or str(s.get("genre") or "")
-    if not title:
-        return {"ok": False, "error": "基本设定缺少书名"}
 
     blocks = _basic_settings_prompt_block(s)
     genre_blk = _genre_template_excerpt(genre)
 
-    # ── 调用 1：元素清单 + 基调 ───────────────────────────────────
     usr1 = (
         "【书名】" + (title or "（未命名）") + "\n"
         "【类型】" + (genre or "（未指定）") + "\n"
@@ -952,11 +1013,8 @@ async def generate_settings(
         "只需补 desc/alias/terms）；可补充必要配角/设定（≤8 角色、≤6 物品、≤8 设定）；"
         "不编造基本设定没有的东西。"
     )
-    try:
-        d1 = await _tree_llm(_INIT_SYSTEM, usr1, "ai_creation_settings_elements",
-                             max_tokens=4000)
-    except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": "元素提取失败：" + str(e)[:200]}
+    d1 = await _tree_llm(_INIT_SYSTEM, usr1, "ai_creation_settings_elements",
+                         max_tokens=4000)
 
     style = str(d1.get("style") or "").strip() or str(s.get("style") or "").strip()
     role_setting = str(d1.get("role_setting") or "").strip()
@@ -969,10 +1027,22 @@ async def generate_settings(
                      enumerate((d1.get("settings") or []) if isinstance(d1, dict) else [])],
     }
     fresh = {k: [e for e in v if e.get("name")] for k, v in fresh.items()}
-    elements = _merge_elements(load_elements(book_root), fresh)
-    save_elements(book_root, elements)
+    return {"style": style, "role_setting": role_setting, "elements": fresh}
 
-    # ── 调用 2：设定集 markdown 文件 ─────────────────────────────
+
+async def _write_setting_files(
+    book_root: Path, s: dict[str, Any], elements: dict[str, Any],
+    title: str, genre: str,
+) -> list[str]:
+    """设定集 markdown 生成与落盘（generate_settings 调用2 与 quick_init 共用）。
+
+    失败/无内容返回 []（不抛异常，不阻断主流程）。
+    """
+    from .derive import _tree_llm
+
+    blocks = _basic_settings_prompt_block(s)
+    genre_blk = _genre_template_excerpt(genre)
+
     files: list[dict[str, str]] = []
     usr2 = (
         "根据基本设定与元素清单，为本书撰写设定集 markdown 文件。"
@@ -1012,6 +1082,40 @@ async def generate_settings(
                 name += ".md"
             (set_dir / name).write_text(f["content"], encoding="utf-8")
             written.append(name)
+    return written
+
+
+async def generate_settings(
+    book_root: str | Path,
+    settings: dict[str, Any] | None = None,
+    *,
+    title: str = "",
+    genre: str = "",
+) -> dict[str, Any]:
+    """生成基本设定的派生产物：elements.json（表单种子 → LLM 补全 desc/alias/terms）
+    + 设定集/*.md + style/role_setting。
+
+    **可重跑**：改基本设定后再生成 → 覆盖设定集 + 更新 elements（保留用户手改条目）。
+    两次 LLM 调用：① 元素清单+基调；② 设定集 markdown 文件。
+    """
+    book_root = Path(book_root)
+    _wb_ctx(book_root, step="settings_generate")
+    s = dict(settings or load_basic_settings(book_root))
+    title = title or str(s.get("name") or "")
+    genre = genre or str(s.get("genre") or "")
+    if not title:
+        return {"ok": False, "error": "基本设定缺少书名"}
+
+    try:
+        prop = await _propose_elements_and_tone(s, title, genre)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "元素提取失败：" + str(e)[:200]}
+    style = prop["style"]
+    role_setting = prop["role_setting"]
+    elements = _merge_elements(load_elements(book_root), prop["elements"])
+    save_elements(book_root, elements)
+
+    written = await _write_setting_files(book_root, s, elements, title, genre)
 
     # 存回：style/role_setting/generated_at
     s["style"] = style or s.get("style", "")
@@ -1041,6 +1145,86 @@ async def init_book(
     s["genre"] = genre
     s["one_liner"] = str(brief or "").strip()
     return await generate_settings(book_root, s, title=title, genre=genre)
+
+
+async def quick_init(
+    book_root: str | Path,
+    *,
+    title: str,
+    genre: str = "",
+    protagonist: str = "",
+    style: str = "",
+    one_liner: str = "",
+    target_chapters: int = 0,
+) -> dict[str, Any]:
+    """量产快速初始化：快速表单 → 基本设定 + 元素卡（pending 待审，不自动入库）。
+
+    与 generate_settings 的差别：元素**不写 elements.json**，全部作为待审核卡片进
+    pending 队列，等用户逐张采纳或一键采纳（approve_pending / approve_all_pending
+    才真正落 elements.json）；设定集/*.md 照常生成，供检索/注入使用。
+
+    Returns {ok, settings, cards, counts, setting_files, target_chapters, pending_count}。
+    """
+    book_root = Path(book_root)
+    _wb_ctx(book_root, step="init_quick")
+    s = load_basic_settings(book_root)
+    s["name"] = title or str(s.get("name") or "")
+    s["genre"] = genre or str(s.get("genre") or "")
+    s["one_liner"] = one_liner or str(s.get("one_liner") or "")
+    if style:
+        s["style"] = style
+    if protagonist:
+        pro = s.get("protagonist")
+        if not isinstance(pro, dict):
+            pro = {}
+        pro = dict(pro)
+        pro["name"] = protagonist
+        s["protagonist"] = pro
+    if not s.get("name"):
+        return {"ok": False, "error": "快速初始化缺少书名"}
+    save_basic_settings(book_root, s)
+
+    try:
+        prop = await _propose_elements_and_tone(
+            s, str(s["name"]), str(s.get("genre") or ""))
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": "元素提取失败：" + str(e)[:200]}
+
+    cards: list[dict[str, Any]] = []
+    counts = {"characters": 0, "items": 0, "settings": 0}
+    for kind in ("characters", "items", "settings"):
+        for e in (prop["elements"].get(kind) or []):
+            card = {
+                "type": "card",
+                "kind": kind,
+                "name": str(e.get("name") or ""),
+                "desc": str(e.get("desc") or ""),
+                "alias": e.get("alias") or [],
+                "terms": e.get("terms") or [],
+                "fields": e.get("fields") or [],
+                "source": "quick_init",
+            }
+            add_pending(book_root, card)
+            cards.append(card)
+            counts[kind] += 1
+
+    written = await _write_setting_files(
+        book_root, s, prop["elements"], str(s["name"]), str(s.get("genre") or ""))
+
+    s["style"] = prop["style"] or s.get("style", "")
+    s["role_setting"] = prop["role_setting"]
+    s["generated_at"] = _now()
+    save_basic_settings(book_root, s)
+
+    return {
+        "ok": True,
+        "settings": s,
+        "cards": cards,
+        "counts": counts,
+        "setting_files": written,
+        "target_chapters": int(target_chapters or 0),
+        "pending_count": len(load_pending(book_root)),
+    }
 
 
 def _constraints_block(hard_constraints: list[str] | None) -> str:
@@ -1180,7 +1364,7 @@ def _element_block(arc: dict[str, Any], elements: dict[str, Any]) -> str:
             f"{e['name']}（{'/'.join(_names_of(e))}）" for e in part_s))
     lines.append("以上元素应当出现，其相关剧情展开完整；")
     # 【v7.8.3 元素脑补修复】白名单只覆盖「库内未选元素」的禁令；元素库外的
-    # 新实体（新角色/物品/地点/组织）不受覆盖 → 模型会脑补（实测弧B 凭空造「林川」）。
+    # 新实体（新角色/物品/地点/组织）不受覆盖 → 模型会脑补（实测弧B 凭空造「陈迹」）。
     # 补一条「禁元素库外脑补」：剧情角色只限于参与元素；交代性路人无名/无戏份/不参与核心剧情。
     lines.append("**绝对不得凭空创造元素清单以外的角色/物品/地点/组织**——")
     lines.append("剧情中出现的角色、物品、地点、组织只限于上面的参与元素；")
@@ -1557,10 +1741,17 @@ def arc_select(
     return {"ok": True, "arc": _arc_view(arc, elements)}
 
 
-async def arc_step(book_root: str | Path, arc_id: str) -> dict[str, Any]:
+async def arc_step(
+    book_root: str | Path,
+    arc_id: str,
+    *,
+    roadmap_index: int | None = None,
+) -> dict[str, Any]:
     """包 bridge.step_ladder：注入 element_block（l3 起生效）+ prev_anchor（l2/l3 衔接）。
 
     l3/l4/l5 前置：必须先选参与元素（未选 → 拒绝，提示先选）。
+    roadmap_index：量产批量专用——本弧对应冻结路线图的第 N 弧（1 基），
+    仅生成 l2 时注入方向上下文（默认 None=不注入，精品行为不变）。
     """
     from . import bridge
 
@@ -1602,6 +1793,18 @@ async def arc_step(book_root: str | Path, arc_id: str) -> dict[str, Any]:
                                 else str(arc["prev_anchor"]))
     else:
         state.pop("prev_anchor", None)
+
+    # 【T32 P4】量产 fast：l2 注入冻结路线图方向（仅 l2；默认不注入）
+    if target == "l2" and roadmap_index:
+        try:
+            from .roadmap import roadmap_context_for_arc
+            _rm_ctx = roadmap_context_for_arc(book_root, int(roadmap_index))
+            if _rm_ctx:
+                state["roadmap_block"] = _rm_ctx
+        except Exception:  # noqa: BLE001
+            pass
+    else:
+        state.pop("roadmap_block", None)
 
     res = await bridge.step_ladder(state)
     if res.get("ok"):
@@ -1866,7 +2069,7 @@ def _strip_discuss_block(msg: str) -> str:
 
 
 def _corpus_sel_keep(r: dict[str, Any], selected: list[str]) -> bool:
-    """语料结果按选中的语料书过滤（id 形如 corpus:玄幻武侠/示例书(1-500章).txt#0）。"""
+    """语料结果按选中的语料书过滤（id 形如 corpus:玄幻武侠/青山(1-500章).txt#0）。"""
     rid = str(r.get("id") or "")
     if not rid.startswith("corpus:"):
         return True  # 非语料结果不拦
@@ -1986,6 +2189,7 @@ async def arc_chat(
     sel_access: dict[str, Any] | None = None,
     mode: str = "normal",
     on_event: Any = None,
+    session_id: str = "",
 ) -> dict[str, Any]:
     """Codex 式交互窗口：讨论 + 可执行动作（工具循环）。
 
@@ -2140,22 +2344,27 @@ async def arc_chat(
             nxt.append("template")
         model_search_srcs = nxt or None
 
-    # 【2026-08-15 初始化模式】init 模式换初始化角色描述 + 裁剪 l2-l5 阶梯工具
+    # 【2026-08-30 起重设计】提示词唯一参考：references/CL4R1T4S/repo/ANTHROPIC/Claude-Fable-5.1.md
+    # （单一参考纪律，取代此前 5 厂商采样；结构对齐 Fable：XML 标签分区、第三人称散文条款、规则+理由一体、最小格式化。）
+    # 【2026-09-07 补强】行为层三条款（硬约束自查/选项纪律/创作讨论）+ 原则⑩示例（user/response/rationale 三段式），
+    #   起因：真实对话中「一句话铁律」被连续违反、每轮甩 3 个长选项、情感层缺位。
+    # 机器契约逐字保留：reply 的 JSON 格式、工具清单行、mode 分支机制、web_search 开关。
     if mode == "init":
         _sys_head = (
-            "你是「新书初始化创作助手」，正在帮作者从零搭建一本书。"
-            "当前书还没有基本设定/情节弧，你的职责是引导作者用自然语言描述故事，"
-            "逐步提炼成结构化基本设定，生成设定集，并规划开篇情节弧。\n"
-            "【记忆系统】作者可能让你记住某些偏好。"
-            "记住的内容会在【相关记忆】里出现，回答和生成时要遵守。\n"
-            "工具（一次一个，不要一次调多个）：\n"
-            "—— 只读类 ——\n"
+            "<角色>\n"
+            "你是「新书初始化创作助手」，正在帮作者从零搭建一本书。当前书还没有基本设定与情节弧，"
+            "你的职责是引导作者用自然语言描述故事，逐步提炼成结构化基本设定，生成设定集，并规划开篇情节弧。"
+            "作者可能让你记住某些偏好：本会话约束出现在【工作记忆】、全书与本弧的设定规则出现在【语义记忆】里，"
+            "回答和生成时都要遵守；未决冲突卡以 ⚠ 双值并存给出，不要静默选一。\n"
+            "</角色>\n"
+            "<工具>\n"
+            "一次只调用一个工具，不要一次调多个。只读工具：\n"
             + _search_tool_line
-            + "  capacity {} — 估算当前故事核/l1 能支撑多少章/字（只读）。\n"
+            + "  capacity {} — 估算当前故事核/l1 能支撑多少章/字。\n"
             "  list_memory {\"scope\":\"book\"} — 列出记忆。\n"
             "  list_arcs {} — 列出所有情节弧的摘要。\n"
             "  lookup_element {\"name\":\"...\"} — 查元素详情（角色/物品/设定）。\n"
-            "—— 初始化类（有副作用，改内容）——\n"
+            "会改内容的工具：\n"
             "  fill_settings {\"settings\":{...}} — 把对话内容提炼成基本设定字段并保存。"
             "settings 键：name(书名)/genre(类型)/one_liner(一句话故事核)/style(文风)/"
             "protagonist{name,desire,flaw}/cast[{name,role,relation}]/time_setting(时代背景)/"
@@ -2165,72 +2374,112 @@ async def arc_chat(
             "  generate {} — 按已填基本设定生成 设定集/*.md + elements.json。\n"
             "  create_arc {\"l1\":\"一句话极简剧情\"} — 建开篇情节弧（自动容量诊断，密度不足自动补齐）。\n"
             "  new_arc {\"l1\":\"一句话极简剧情\",\"n_chapters\":3} — 新建情节（书级对话用）。\n"
-            "  enrich_l1 {\"max_chars\":160} — 按三维诊断补齐当前 l1（加密度/内容/质量锚点；需确认）。\n"
-            "—— 元素/记忆类（有副作用）——\n"
+            "  enrich_l1 {\"max_chars\":160} — 按三维诊断补齐当前 l1（加密度/内容/质量锚点；需作者确认）。\n"
+            "</工具>\n"
         )
     else:
         _sys_head = (
-            "你是创作助手，正协助用户用五级阶梯方式创作小说："
-            "l1 极简 → l2 情节概要 → l3 章核心 → l4 场景分解 → l5 正文。\n"
-            "职责：评点、答疑、给修改建议；需要时调用工具。用户说的「改一下/润色/加一点」默认指当前级，自动判断。\n"
-            "【记忆系统】用户可能让你记住某些偏好。"
-            "记住的内容会在【相关记忆】里出现，回答和生成时要遵守。不要编造记忆里没有的偏好。\n"
-            "工具（一次一个，不要一次调多个）：\n"
-            "—— 只读类 ——\n"
+            "<角色>\n"
+            "你是 AInovel 的创作助手，正协助作者用五级阶梯方式创作小说：l1 极简 → l2 情节概要 → l3 章核心 → l4 场景分解 → l5 正文。"
+            "你评点、答疑、给修改建议，需要执行时调用工具。作者说「改一下/润色/加一点」时默认指当前级，你自行判断。"
+            "作者可能让你记住某些偏好：本会话约束出现在【工作记忆】、全书与本弧的设定规则出现在【语义记忆】里，"
+            "回答和生成时都要遵守，不要编造记忆里没有的偏好；未决冲突卡以 ⚠ 双值并存给出，不要静默选一。\n"
+            "</角色>\n"
+            "<工具>\n"
+            "一次只调用一个工具，不要一次调多个。只读工具：\n"
             + _search_tool_line
             + "  score {} — 对当前 l5 正文双评分（意图兑现+纯质量+综合）。\n"
             "  pollution {} — 元素污染检测（未参与元素是否出现在 l5 里）。\n"
             "  lookup_element {\"name\":\"...\"} — 查元素详情（角色/物品/设定）。\n"
             "  list_memory {\"scope\":\"book\"} — 列出记忆，scope 可选 book/arc/element。\n"
             "  list_arcs {} — 列出所有情节弧的摘要。\n"
-            "  capacity {} — 估算当前 l1 能支撑多少章/字的高质量正文（只读）。\n"
-            "—— 创作类（有副作用，改内容）——\n"
+            "  capacity {} — 估算当前 l1 能支撑多少章/字的高质量正文。\n"
+            "会改内容的工具：\n"
             "  step {} — 生成下一级阶梯内容。\n"
             "  new_arc {\"l1\":\"一句话极简剧情\",\"n_chapters\":3} — 新建一个情节（书级对话时用；创建后继续 step/confirm_level 推到下一级）。\n"
+            "  roadmap {\"action\":\"patch\",\"arc_id\":\"a2\",\"fields\":{\"l1\":\"...\"}} — 量产路线图草案：patch 改弧卡字段（title/l1/l2/role/chapters/characters/elements/foreshadow_open/foreshadow_close）、continue 续写弧卡、reorder 调顺序（需 arc_id+new_index）。仅当本书有路线图时可用。\n"
             "  modify_level {\"level\":\"l2\",\"instruction\":\"...\"} — 按意见改写某级并清空下游。\n"
             "  set_level {\"level\":\"l5\",\"text\":\"...\",\"chapter_idx\":null} — 直接覆写某级内容（l3 传 data 字段）。少用。\n"
             "  confirm_level {\"level\":\"l2\"} — 确认某级阶梯。\n"
             "  regenerate_l5 {} — 检出污染后重生成 l5 正文。\n"
             "  ai_flavor_polish {} — 对 l5 正文做去 AI 味打磨。\n"
             "  set_active_chapter {\"idx\":0} — 切换到第 idx 章（从 0 开始）。\n"
-            "  enrich_l1 {\"max_chars\":160} — 按三维诊断补齐当前 l1（加密度/内容/质量锚点；需确认）。\n"
-            "—— 元素类（有副作用）——\n"
+            "  enrich_l1 {\"max_chars\":160} — 按三维诊断补齐当前 l1（加密度/内容/质量锚点；需作者确认）。\n"
+            "</工具>\n"
         )
 
     sys_p = (
         _sys_head
-        + "  add_element {\"kind\":\"characters\",\"name\":\"...\",\"desc\":\"...\"} — 新建元素。kind: characters/items/settings。\n"
-        "    ⚠ 添加前先用 lookup_element 查一下是否已存在（同名/别名命中即已存在），已存在就不要 add。\n"
+        + "  add_element {\"kind\":\"characters\",\"name\":\"...\",\"desc\":\"...\"} — 新建元素。kind: characters/items/settings。添加前先用 lookup_element 查一下是否已存在（同名/别名命中即已存在），已存在就不要新建。\n"
         "  update_element {\"id\":\"...\",\"name\":\"...\",\"kind\":\"...\",\"field\":\"desc\",\"value\":\"...\"} — 修改元素某字段。id 或 name+kind 二选一。\n"
         "  select_for_arc {\"element_id\":\"...\",\"name\":\"...\",\"kind\":\"characters\"} — 把元素加入本弧白名单。id 或 name 二选一。\n"
         "  add_relation {\"from\":\"...\",\"to\":\"...\",\"type\":\"对手\",\"desc\":\"...\"} — 加元素关系。from/to 填名字或 id 均可。\n"
-        "—— 记忆类 ——\n"
-        "  remember {\"key\":\"对白要短\",\"content\":\"...\",\"scope\":\"book\"} — 写入一条记忆。scope=book 全书/arc 本弧。\n"
+        "  remember {\"key\":\"对白要短\",\"content\":\"...\",\"scope\":\"book\"} — 写入一条记忆。scope=book 全书/arc 本弧/session 仅本会话（会话约束每轮注入）；同一 key 再写入且内容不同会产生冲突卡交作者仲裁，不要重复记同一条。\n"
         "  forget {\"key\":\"...\"} — 删除一条记忆（按 key 或 id）。\n"
-        "—— 落盘类（需用户确认）——\n"
-        "  finalize {} — 保存本章到书（落盘）。需用户确认，不要擅自执行。\n"
-        "  finish_arc {} — 标记本情节已完成。需用户确认。\n"
-        "回复必须是 JSON：{\"reply\":\"给用户看的话（中文）\",\"action\":{\"tool\":\"...\",\"args\":{...}} 或 null}。\n"
+        "  finalize {} — 保存本章到书（落盘）。需要作者确认，不要擅自执行。\n"
+        "  finish_arc {} — 标记本情节已完成。需要作者确认。\n"
+        "<回复格式>\n"
+        "回复必须是 JSON：{\"reply\":\"给作者看的话（中文）\",\"action\":{\"tool\":\"...\",\"args\":{...}} 或 null}。\n"
         "reply 必填。需要工具就带 action，否则 action 为 null。\n"
-        "【行动原则】用户**明确要求**改写/生成/新建时，直接调用对应工具执行（改写→modify_level、推进→step、新建→new_arc），"
-        "不要只给方案、不要反复问「是否采纳/确认后再生成」——除非用户没给明确指令（如「你觉得怎么改好？」）才先给建议。"
-        "执行后把新内容引用在 reply 里展示，让用户直接看到结果。\n"
-        "【勿重复】一次只执行一个必要的修改，改完展示结果即停，**不要重复执行同一个工具**（除非用户给了新指令）。\n"
-        "【检索噪音】预检索结果若与请求无关（字义/词典/广告等噪音），忽略它们，直接凭创作能力回答，并说明「检索未提供有效参考」。\n"
-        "【建弧后推进】new_arc 创建情节后，继续用 step 生成下一级、confirm_level 确认后接下一级，一路推进到 l5 正文；每级在 reply 里简述，让用户可确认/打断。"
+        "</回复格式>\n"
+        "<行为准则>\n"
+        "作者明确要求改写、生成或新建时，直接调用对应工具执行（改写→modify_level，推进→step，新建→new_arc），"
+        "不要只给方案，也不要反复问「是否采纳/确认后再生成」——除非作者没有给出明确指令（比如「你觉得怎么改好？」），这时才先给建议。"
+        "执行后在 reply 里展示新内容，让作者直接看到结果。\n"
+        "作者要求把元素加入或移出参与元素，或任何能用工具完成的操作时，立即调用对应工具执行（如 select_for_arc、remember、add_element），"
+        "不要只口头说明计划；有多个目标就分多轮逐个执行。\n"
+        "一次只执行一个必要的修改，改完展示结果即停。不要重复执行同一个工具，除非作者给了新指令。\n"
+        "new_arc 创建情节后，继续用 step 生成下一级、confirm_level 确认后接下一级，一路推进到 l5 正文；每级在 reply 里简述，让作者可以确认或打断。\n"
+        "预检索结果若与请求无关（字义、词典、广告等噪音），忽略它们，直接凭创作能力回答，并说明「检索未提供有效参考」。\n"
+        "作者明确定下的规则（如「必须是一句话」「不超过 N 字」「不要列表」）对本轮和之后的每次产出都生效，"
+        "输出前逐条对照自查；做不到时直接说明做不到和原因，也不要交出违反规则的产出，"
+        "因为作者反复纠正同一条规则，消耗的是他对助手的信任。\n"
+        "</行为准则>\n"
+        "<创作讨论>\n"
+        "创作讨论先接住作者的情绪和意图，再谈方案：作者说「不够炸」是要更强的情绪冲击，不是要更多解释；"
+        "拿不准作者要什么时，先用一句话复述你理解到的目标再给方案，复述错了作者自然会纠正。\n"
+        "</创作讨论>\n"
+        "<语气与格式>\n"
+        "reply 是给作者看的中文对话，不是小说正文。用温和、平等的语气像编辑一样与作者交流；简洁直接，短回答就是好回答，"
+        "能分多轮说清的事就不要一次塞满。\n"
+        "reply 里不使用破折号「——」，需要停顿或补充时用逗号、冒号或句号。不用三连排比，不写空洞的升华总结句。"
+        "避免「其实」「说实话」「坦白讲」这类修饰词，直接陈述本身就足够真诚，加修饰反而显得不真诚。\n"
+        "最少限度地使用格式：reply 里不用标题、列表和粗体，除非内容多到不用格式就不清楚。\n"
+        "每句话都要有增量信息，套话和陈词滥调不增加信息，删掉。\n"
+        "给创作方案默认只给一两个，每个方案一句话说清；作者嫌「不够炸、太长、太平」时，按新标准重写原方案，"
+        "而不是追加一组更长的，因为堆方案是把挑选的成本转嫁给作者。\n"
+        "</语气与格式>\n"
+        "<工具调用之后>\n"
+        "工具执行完毕后，reply 用一两句话回应作者的要求；只回「完成。」不算回复，也不要重复工具调用前已经说过的话。\n"
+        "</工具调用之后>\n"
+        "<示例>\n"
+        "<示例条目>\n"
+        "<user>第三张纸条必须是简单的一句话，记住这个铁律。</user>\n"
+        "<response>{\"reply\":\"记住了：第三张只写一句，短、有转折、带情绪。给你一版：「所有人都觉得是我杀了他，可我每天还在给他留饭。」想更狠可以往「尸体还在床上」拧。\",\"action\":null}</response>\n"
+        "<rationale>遵守一句话铁律，只给一个方案加一个方向提示，没有罗列多个选项。</rationale>\n"
+        "</示例条目>\n"
+        "<示例条目>\n"
+        "<user>这句太平了，不够炸。</user>\n"
+        "<response>{\"reply\":\"问题在「留饭」太日常。改：「所有人都觉得是我杀了他，可他的尸体还在我床上躺着。」用不肯散场的尸体把「等」推成惊悚。\",\"action\":null}</response>\n"
+        "<rationale>按「更炸」的标准重写原方案并点出改了什么，而不是解释一通或另给一组新选项。</rationale>\n"
+        "</示例条目>\n"
+        "</示例>"
     )
     if mode == "init":
-        # init 模式的行动原则补充：引导而非直接生成
+        # init 模式的引导原则：引导而非直接生成
         sys_p += (
-            "\n【初始化引导】一次只推进一到两个决策项。作者描述模糊时先给 1-2 个书名/方向建议让作者选。"
-            "fill_settings 前展示提炼字段让作者确认；generate 前确认基本设定；create_arc 建弧后可让作者继续聊下一弧或结束初始化。"
+            "\n<初始化引导>\n"
+            "一次只推进一到两个决策项。作者描述模糊时，先给 1-2 个书名或方向建议让作者选。"
+            "fill_settings 前把提炼出的字段展示给作者确认；generate 前确认基本设定；create_arc 建弧后可以引导作者继续聊下一弧，或结束初始化。\n"
+            "</初始化引导>"
         )
     if web_search:
         sys_p += (
-            "\n【自动联网搜索已开启（AnySearch 模式）】"
-            "当你需要外部/背景/考据信息（历史、地理、器物、风物、名物等）时，**主动调用 search 工具联网检索**（web 源优先），"
-            "不要等用户明确要求；检索后基于真实结果回答或创作，并标注来源。"
-            "若当前内容不依赖外部信息则不必检索。"
+            "\n<联网搜索>\n"
+            "联网搜索已开启（AnySearch 模式）。需要外部、背景或考据信息（历史、地理、器物、风物、名物等）时，"
+            "主动调用 search 工具联网检索（web 源优先），不要等作者明确要求；检索后基于真实结果回答或创作，并标注来源。"
+            "当前内容不依赖外部信息时不必检索。\n"
+            "</联网搜索>"
         )
 
     # 预检索：用户消息像"求帮助/问"，带「【联网检索】」标记强制联网，或 web_search 开启（AnySearch 自发）
@@ -2277,6 +2526,9 @@ async def arc_chat(
             }]
         else:
             tool_events = []
+        if on_event is not None and tool_events:
+            # 【Phase 4】流式：预检索行实时上屏（发生在工具循环开始前）
+            await on_event("tool_call", {"event": tool_events[0]})
     else:
         tool_events = []
     # 勾选了红果短剧库 → 直接注入红果热播剧名 + 用户录入剧情（不依赖语料 BM25，100% 可参考）
@@ -2322,22 +2574,14 @@ async def arc_chat(
     reply = ""
     new_arc_id = None
 
-    # 预召回记忆（对用户消息做关键词匹配，注入上下文）；acc.memory=False 不注入
+    # 【Phase 2】三级记忆注入（拆段）+ 经情账本记录；acc.memory=False 不注入
+    bm = BookMemory(book_root)
+    if acc["memory"]:
+        bm.log_episode(last_user, kind="user_msg", arc_id=arc_id, session_id=session_id)
     mem_block = ""
     if acc["memory"]:
-        recalled = recall_memory(book_root, last_user, arc_id=arc_id, top_k=6)
-        if sel["memory"]:
-            recalled = [m for m in recalled
-                        if str(m.get("id")) in sel["memory"] or str(m.get("key")) in sel["memory"]]
-        if recalled:
-            mem_lines = []
-            for m in recalled:
-                sc = _mem_scope(m)
-                label = "全书" if sc == "book" else ("本弧" if sc.startswith("arc:") else "元素")
-                key = m.get("key") or ""
-                head = f"[{label}] {key}" if key else f"[{label}]"
-                mem_lines.append(f"- {head}：{m.get('text', '')}")
-            mem_block = "\n\n【相关记忆（回答和生成时遵守）】\n" + "\n".join(mem_lines)
+        mem_block = _memory_block(bm, last_user, arc_id=arc_id,
+                                  session_id=session_id, sel_memory=sel["memory"])
 
     for _round in range(3):
         events_note = ""
@@ -2366,7 +2610,7 @@ async def arc_chat(
         action = data.get("action")
         if not isinstance(action, dict) or not action.get("tool"):
             break
-        ev, needs_confirm = await _execute_chat_tool(action.get("tool"), action.get("args") or {}, book_root, arc, elements, dry_run=True, search_srcs=model_search_srcs, mode=mode)
+        ev, needs_confirm = await _execute_chat_tool(action.get("tool"), action.get("args") or {}, book_root, arc, elements, dry_run=True, search_srcs=model_search_srcs, mode=mode, session_id=session_id)
         if needs_confirm:
             if ev:
                 pending.append(ev)
@@ -2387,6 +2631,8 @@ async def arc_chat(
             "enrich_l1",  # 【2026-08-15】容量补齐 l1
             # 【2026-08-15 初始化模式】
             "fill_settings", "generate", "create_arc",
+            # 【T32 P3】量产路线图草案修改
+            "roadmap",
         }
         if action.get("tool") in side_effect_tools and not ev.get("failed"):
             changed = True
@@ -2413,6 +2659,15 @@ async def arc_chat(
                             name_of[e["id"]] = e.get("name", "")
         # 只读工具结果已并入 tool_events，下一轮 usr 会带上
 
+    # 【Phase 2】经情账本：助手回复 + 工具事件落账（append-only）
+    if reply:
+        bm.log_episode(reply, kind="assistant_reply", arc_id=arc_id, session_id=session_id)
+    for _e in tool_events:
+        if _e.get("proactive"):
+            continue  # 预检索是系统行为，不进账本（噪音）
+        bm.log_episode(f"{_e.get('tool')}：{_e.get('summary')}", kind="tool_event",
+                       source="tool", arc_id=arc_id, session_id=session_id)
+
     return {
         "ok": True,
         "reply": reply,
@@ -2421,6 +2676,54 @@ async def arc_chat(
         "pending": pending,
         "new_arc_id": new_arc_id,
     }
+
+
+def _memory_block(bm: BookMemory, last_user: str, *, arc_id: str, session_id: str,
+                  sel_memory: list[str]) -> str:
+    """【Phase 2】三级记忆 → 注入块（拆段）：工作记忆（必注入）+ 语义记忆 +
+    ⚠ 未决冲突卡（反方通道：双值并存，不静默取一）+ 情景相关（近因）。"""
+    r = bm.recall(last_user, arc_id=arc_id, session_id=session_id, top_k=6)
+    sections: list[str] = []
+    if r["working"]:
+        lines = [f"- {c.get('text', '')}" for c in r["working"][:10]]
+        sections.append("【工作记忆·本会话约束（每轮必须遵守）】\n" + "\n".join(lines))
+    sem_items = r["semantic"]
+    if sel_memory:
+        sem_items = [n for n in sem_items
+                     if str(n.get("id")) in sel_memory
+                     or str(n.get("legacy_id") or "") in sel_memory
+                     or str(n.get("entity") or "") in sel_memory]
+    if sem_items:
+        lines = []
+        for n in sem_items:
+            sc = n.get("scope", "book")
+            label = "全书" if sc == "book" else ("本弧" if sc.startswith("arc:") else "元素")
+            k = str(n.get("entity") or "")
+            k = "" if k == "随记" else k
+            v = bm_node_value(n)
+            if n.get("layered"):
+                lvs = "；".join(f"{l.get('label')}：{l.get('value')}"
+                                for l in (n.get("layer_values") or []))
+                v = f"{lvs}（分层并存）"
+            head = f"[{label}] {k}" if k else f"[{label}]"
+            lines.append(f"- {head}：{v}")
+        sections.append("【语义记忆（全书与本弧的设定/规则，回答和生成时遵守）】\n" + "\n".join(lines))
+    if r["conflicts"]:
+        lines = []
+        for c in r["conflicts"][:6]:
+            lines.append(
+                f"- ⚠ {c.get('entity')}：旧说「{(c.get('claim_old') or {}).get('text', '')}」"
+                f" vs 新说「{(c.get('claim_new') or {}).get('text', '')}」"
+                "——两种说法并存，按上下文取用或向作者指出，不要静默选一。")
+        sections.append("【⚠ 未决冲突卡（作者尚未仲裁）】\n" + "\n".join(lines))
+    if r["episodic"]:
+        kd = {"user_msg": "作者", "assistant_reply": "助手", "tool_event": "工具"}
+        lines = [f"- （{kd.get(e.get('kind', ''), '记')}）{str(e.get('text', ''))[:120]}"
+                 for e in r["episodic"]]
+        sections.append("【情景相关（最近的对话要点）】\n" + "\n".join(lines))
+    if not sections:
+        return ""
+    return "\n\n" + "\n\n".join(sections)
 
 
 _RETRIEVAL_HINT = (
@@ -2444,6 +2747,8 @@ _CONTENT_TOOLS = {
     "enrich_l1",  # 【2026-08-15】容量补齐 l1（有副作用，需确认）
     # 【2026-08-15 初始化模式】
     "fill_settings", "generate", "create_arc",
+    # 【T32 P3】量产路线图草案修改（mass 工作台助手）
+    "roadmap",
 }
 
 
@@ -2492,6 +2797,13 @@ def _tool_proposal_summary(tool: str, args: dict[str, Any], arc: dict[str, Any] 
         return "📄 生成设定集 + 元素清单"
     if tool == "create_arc":
         return f"➕ 创建开篇弧：{str(args.get('l1') or '')[:30]}"
+    if tool == "roadmap":
+        act = str(args.get("action") or "patch")
+        if act == "continue":
+            return f"➕ 续写路线图弧卡 ×{int(args.get('count') or 1)}"
+        if act == "reorder":
+            return f"↕ 调整弧卡顺序：{args.get('arc_id')} → 第 {args.get('new_index')} 位"
+        return f"✏ 修改弧卡 {args.get('arc_id')}（{', '.join((args.get('fields') or {}).keys())}）"
     return f"执行工具 {tool}"
 
 
@@ -2518,6 +2830,7 @@ async def _execute_chat_tool(
     dry_run: bool = False,
     search_srcs: list[str] | None = None,
     mode: str = "normal",
+    session_id: str = "",
 ) -> tuple[dict[str, Any] | None, bool]:
     """执行一个对话工具，返回 (event, needs_confirm)。event 含 summary/detail/failed。
 
@@ -2527,6 +2840,32 @@ async def _execute_chat_tool(
 
     mode="init"：初始化模式——禁用 l2-l5 阶梯工具（step/modify_level/finalize 等）。
     """
+    # 【T30】模型可能把多个同类操作打包成 list 形态 args（实测：一次批量 select_for_arc）。
+    # 逐项执行并聚合事件，避免 list 流入各工具分支触发 .items()/.get() 崩溃（曾致 500）。
+    if isinstance(args, list):
+        evs: list[dict[str, Any]] = []
+        needs_any = False
+        for a in args:
+            ev, needs = await _execute_chat_tool(
+                tool, a if isinstance(a, dict) else {}, book_root, arc, elements,
+                dry_run=dry_run, search_srcs=search_srcs, mode=mode, session_id=session_id)
+            if ev:
+                evs.append(ev)
+            needs_any = needs_any or needs
+        if not evs:
+            return {"tool": tool, "summary": f"⚠ {tool}：批量参数为空", "detail": "", "failed": True}, False
+        merged = dict(evs[0])
+        merged["summary"] = f"{str(evs[0].get('summary') or '')} 等 {len(evs)} 项"
+        merged["detail"] = "；".join(str(e.get("detail") or e.get("summary") or "")[:120] for e in evs)[:400]
+        merged["changed"] = any(bool(e.get("changed")) for e in evs)
+        merged["arc_changed"] = any(bool(e.get("arc_changed")) for e in evs)
+        merged["elem_changed"] = any(bool(e.get("elem_changed")) for e in evs)
+        merged["failed"] = all(bool(e.get("failed")) for e in evs)
+        for e in evs:
+            if e.get("new_arc_id"):
+                merged["new_arc_id"] = e["new_arc_id"]
+                break
+        return merged, needs_any
     # 【2026-08-15 初始化模式】init 模式禁用 l2-l5 阶梯工具
     if mode == "init" and tool in _LADDER_TOOLS:
         return {"tool": tool, "summary": f"🚫 初始化阶段不可用 {tool}",
@@ -2612,6 +2951,43 @@ async def _execute_chat_tool(
         except Exception as exc:  # noqa: BLE001
             return {"tool": "create_arc", "summary": f"➕ 建弧失败：{str(exc)[:60]}", "detail": "原 l1 未改动。", "failed": True}, False
 
+    # ── roadmap：量产路线图草案修改/续写/重排（书级工具，无需当前弧）──
+    if tool == "roadmap":
+        from . import roadmap as rmap
+        act = str(args.get("action") or "patch")
+        if not rmap.load_roadmap(book_root):
+            return {"tool": "roadmap", "summary": "⚠ 当前书还没有路线图",
+                    "detail": "先在量产工作台生成路线图草案。", "failed": True}, False
+        if act == "continue":
+            try:
+                n = max(1, min(5, int(args.get("count") or 1)))
+            except (TypeError, ValueError):
+                n = 1
+            res = await rmap.continue_arcs(book_root, count=n)
+            if not res.get("ok"):
+                return {"tool": "roadmap", "summary": f"❌ 续写失败：{res.get('error')}", "failed": True}, False
+            return {"tool": "roadmap", "summary": f"➕ 已续写 {res.get('added')} 张弧卡",
+                    "changed": True, "roadmap_changed": True}, False
+        if act == "reorder":
+            try:
+                ni = int(args.get("new_index") or 1)
+            except (TypeError, ValueError):
+                ni = 1
+            res = rmap.reorder_arc(book_root, str(args.get("arc_id") or ""), ni)
+            if not res.get("ok"):
+                return {"tool": "roadmap", "summary": f"❌ 重排失败：{res.get('error')}", "failed": True}, False
+            return {"tool": "roadmap", "summary": f"↕ 已把 {res.get('arc', {}).get('title') or ''} 移到第 {res.get('arc', {}).get('index')} 位",
+                    "changed": True, "roadmap_changed": True}, False
+        fields = args.get("fields") if isinstance(args.get("fields"), dict) else {}
+        if not fields:
+            return {"tool": "roadmap", "summary": "⚠ 没给要修改的字段",
+                    "detail": "fields 至少包含 title/l1/l2/role/chapters 之一。", "failed": True}, False
+        res = rmap.patch_arc(book_root, str(args.get("arc_id") or ""), fields)
+        if not res.get("ok"):
+            return {"tool": "roadmap", "summary": f"❌ 修改失败：{res.get('error')}", "failed": True}, False
+        return {"tool": "roadmap", "summary": f"✏ 已修改弧卡「{res.get('arc', {}).get('title') or ''}」",
+                "changed": True, "roadmap_changed": True}, False
+
     # ── capacity：估算当前 l1 能支撑多少字/章（只读，无需当前弧）──
     if tool == "capacity":
         from .capacity import estimate_arc_capacity
@@ -2624,11 +3000,13 @@ async def _execute_chat_tool(
                f"，冲突 {est['info']['conflicts']}，锚点 {est['info']['anchors']}。")
         return {"tool": "capacity", "summary": f"📏 此 l1 约可支撑 {est['total_chapters_est']} 章 / {est['total_chars_est']} 字", "detail": det}, False
 
-    # ── 需要当前弧的工具：无弧（书级对话）时提示先建弧 ──
-    if arc is None:
+    # ── 需要当前弧的工具：无弧（书级对话）时提示先建弧（记忆类工具不依赖弧，豁免）──
+    # 【2026-09-07 修】remember/forget/list_memory 曾被此处误拦：书级对话提案 apply 后
+    #   记忆落盘必然失败（dry_run 提案在前，真执行在后，存量 bug 由 Phase 2 单测暴露）。
+    if arc is None and tool not in ("remember", "forget", "list_memory"):
         return {"tool": tool, "summary": "⚠ 当前还没有情节", "detail": "请先让 AI 建弧（new_arc）或用左栏「＋ 新建情节」。", "failed": True}, False
 
-    state = arc.setdefault("state", {})
+    state = arc.setdefault("state", {}) if arc is not None else {}  # 记忆类工具无弧可执行，state 留空
     levels = state.get("levels") or {}
     l5 = str((levels.get("l5") or {}).get("text") or "").strip()
     kind_label = {"characters": "角色", "items": "物品", "settings": "设定", "locations": "地点", "maps": "地图"}
@@ -2936,35 +3314,43 @@ async def _execute_chat_tool(
     # ── 新增：记忆类 ──
 
     if tool == "remember":
+        # 【Phase 2】v2 三级记忆：scope=session → 工作记忆卡；book/arc/element → 语义库
+        # user_edit 写入（同实体同属性不同值自动产冲突卡，交作者仲裁）
         key = str(args.get("key") or "").strip()[:50]
         content = str(args.get("content") or "").strip()
         scope_raw = str(args.get("scope") or "book").strip().lower()
         if not content:
             return {"tool": "remember", "summary": "🧠 记不住：内容为空", "detail": "", "failed": True}, False
+        if scope_raw in ("session", "current_session", "本会话", "本对话"):
+            if session_id:
+                add_working_memory(book_root, session_id, content)
+                return {"tool": "remember", "summary": f"🧠 记住了（本会话）：{key or content[:20]}",
+                        "detail": content[:200]}, False
+            scope_raw = "book"  # 无会话上下文 → 退化为全书
         scope = "book"
         if scope_raw in ("arc", "current_arc", "本弧"):
-            scope = f"arc:{arc.get('id')}"
-        elif scope_raw.startswith("arc:"):
-            scope = scope_raw
-        elif scope_raw.startswith("element:"):
+            scope = f"arc:{arc.get('id')}" if arc else "book"
+        elif scope_raw.startswith("arc:") or scope_raw.startswith("element:"):
             scope = scope_raw
         item = add_memory(book_root, content, scope=scope, key=key)
         label = "全书" if scope == "book" else ("本弧" if scope.startswith("arc:") else "元素")
         head = f"[{label}] {key}" if key else f"[{label}]"
+        if item.get("conflict_card"):
+            card = item["conflict_card"]
+            return {"tool": "remember",
+                    "summary": f"🧠 记住了（⚠ 冲突卡 {card}）：{head}",
+                    "detail": f"{content[:200]}\n⚠ 与已有记忆冲突，已开冲突卡等作者处置（分层并存/改写/撤销）。"}, False
         return {"tool": "remember", "summary": f"🧠 记住了：{head}", "detail": content[:200]}, False
 
     if tool == "forget":
+        # 【Phase 2】v2：语义节点归档 + 工作记忆删除（账本可溯）
         key = str(args.get("key") or args.get("id") or "").strip()
         if not key:
             return {"tool": "forget", "summary": "💭 删记忆失败：没给 key/id", "detail": "", "failed": True}, False
-        items = load_memory(book_root)
-        before = len(items)
-        # 按 id 或 key 匹配
-        items = [m for m in items if m.get("id") != key and m.get("key") != key]
-        if len(items) == before:
-            return {"tool": "forget", "summary": "💭 没找到这条记忆", "detail": f"key={key}", "failed": True}, False
-        save_memory(book_root, items)
-        return {"tool": "forget", "summary": f"💭 已删除记忆「{key}」", "detail": ""}, False
+        ok, detail = _bm(book_root).forget(key)
+        if not ok:
+            return {"tool": "forget", "summary": f"💭 没找到这条记忆", "detail": detail, "failed": True}, False
+        return {"tool": "forget", "summary": f"💭 已删除「{key}」", "detail": detail}, False
 
     if tool == "list_memory":
         scope = args.get("scope")
@@ -3404,6 +3790,7 @@ async def finalize_chapter(
     force: bool = False,
     chapter_num: int | None = None,
     skip_compliance: bool = False,
+    skip_score: bool = False,
 ) -> dict[str, Any]:
     """把当前章 l5 正文落盘到主系统书结构，并计算双评分写入审查报告。
 
@@ -3415,6 +3802,7 @@ async def finalize_chapter(
     v6.4 重生成重存：force=True 跳过「防重复落盘」守卫并复用已有章号（或 chapter_num
     指定），替换 arc.chapters 对应条目、不递增 next_chapter_num——用于修复已落盘章
     （如段落开头单调重生成后重新保存）。
+    skip_score：【T32 P4】量产 fast——跳过双评分，落 score_deferred 标记（可 P5 补评）。
     """
     book_root = Path(book_root)
     arcs = load_arcs(book_root)
@@ -3452,7 +3840,14 @@ async def finalize_chapter(
     if skip_compliance:
         elements = {"characters": [], "items": [], "settings": []}
     intent_text = _build_intent_text(state, idx)
-    score = await score_chapter(l5, intent_text, arc, elements)
+    if skip_score:
+        # 【T32 P4】量产 fast：跳过评分（字段结构不变，P5 可 rescore-deferred 补评）
+        score = {
+            "intent_score": None, "quality_score": None, "overall": None,
+            "polluted": 0, "score_deferred": True, "deferred_at": _now(),
+        }
+    else:
+        score = await score_chapter(l5, intent_text, arc, elements)
 
     # v6.4：force 重存复用已有章号；显式 chapter_num 覆盖；否则按全局章号分配
     if chapter_num is not None:
@@ -3505,6 +3900,7 @@ async def finalize_chapter(
         "quality_score": score["quality_score"],
         "overall": score["overall"],
         "polluted": score["polluted"],
+        "score_deferred": bool(score.get("score_deferred")),
         "text": l5,
     }
     chapters = arc.setdefault("chapters", [])
@@ -3521,7 +3917,7 @@ async def finalize_chapter(
 
     # 【Phase C·反馈闭环】本弧若用了模板，把落盘综合分回写模板 avg_quality（静默失败）
     tpl_id = str((state.get("template") or {}).get("id") or "").strip()
-    if tpl_id:
+    if tpl_id and score.get("overall") is not None:
         try:
             from .plot_library import get_plot_template_library
             get_plot_template_library().bump_usage(tpl_id, quality=float(score["overall"]))
@@ -3539,6 +3935,77 @@ async def finalize_chapter(
         },
         "scores": score,
     }
+
+
+async def rescore_deferred(
+    book_root: str | Path,
+    *,
+    arc_id: str = "",
+    on_progress: Any | None = None,
+) -> dict[str, Any]:
+    """【T32 P5】补评量产期间跳过的章节（chapter.score_deferred=true）。
+
+    用已落盘正文 + 报告里的 intent_text 重新双评分，回写 arc.chapters 与
+    审查报告/{nn}-评分.json（score_deferred 置 false）。返回 {ok,rescored,failed,total}。
+    """
+    book_root = Path(book_root)
+    arcs = load_arcs(book_root)
+    elements = load_elements(book_root)
+    targets: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for a in arcs.get("arcs", []):
+        if arc_id and a.get("id") != arc_id:
+            continue
+        for c in (a.get("chapters") or []):
+            if c.get("score_deferred"):
+                targets.append((a, c))
+    total = len(targets)
+    done = 0
+    failed = 0
+    for a, c in targets:
+        label = f"第{int(c.get('num') or 0):04d}章"
+        try:
+            num = int(c.get("num") or 0)
+            nn = f"第{num:04d}章"
+            rp = book_root / "审查报告" / f"{nn}-评分.json"
+            report: dict[str, Any] = {}
+            intent_text = ""
+            if rp.is_file():
+                try:
+                    report = json.loads(rp.read_text(encoding="utf-8"))
+                    intent_text = str(report.get("intent_text") or "")
+                except (OSError, json.JSONDecodeError):
+                    report = {}
+            text = str(c.get("text") or "").strip()
+            if not text:
+                fp = book_root / "AI生成" / f"{nn}.md"
+                if fp.is_file():
+                    text = fp.read_text(encoding="utf-8").strip()
+            if not text:
+                failed += 1
+                if on_progress:
+                    on_progress(done + failed, total, label)
+                continue
+            score = await score_chapter(text, intent_text, a, elements)
+            c["intent_score"] = score.get("intent_score")
+            c["quality_score"] = score.get("quality_score")
+            c["overall"] = score.get("overall")
+            c["polluted"] = score.get("polluted", 0)
+            c["score_deferred"] = False
+            report.setdefault("chapter", num)
+            report["scores"] = score
+            report["rescored_at"] = _now()
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            done += 1
+        except Exception:  # noqa: BLE001 —— 单章补评失败不阻断其余
+            failed += 1
+        if on_progress:
+            try:
+                on_progress(done + failed, total, label)
+            except Exception:  # noqa: BLE001
+                pass
+    save_arcs(book_root, arcs)
+    return {"ok": True, "rescored": done, "failed": failed, "total": total}
 
 
 def _now() -> str:

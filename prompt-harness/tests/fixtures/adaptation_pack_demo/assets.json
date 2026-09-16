@@ -1,0 +1,84 @@
+{
+  "assets": [
+    {
+      "asset_id": "bg_classroom_night",
+      "kind": "background",
+      "ref": "loc_classroom",
+      "prompt": "中式恐怖，深夜旧教室，课桌椅整齐，每个座位上一个纸人，窗外路灯光斜切，压抑",
+      "used_by": ["n001"],
+      "status": "pending",
+      "hash": null,
+      "provider_hint": "seedream"
+    },
+    {
+      "asset_id": "bg_hallway_dusk",
+      "kind": "background",
+      "ref": "loc_hallway",
+      "prompt": "中式恐怖，黄昏教学楼走廊，尽头堆着废弃课桌，灰尘逆光",
+      "used_by": ["n002"],
+      "status": "pending",
+      "hash": null,
+      "provider_hint": "seedream"
+    },
+    {
+      "asset_id": "spr_chen_default",
+      "kind": "portrait",
+      "ref": "char_chen",
+      "prompt": "中式恐怖画风，高中男生立绘，校服，神色不安，深色背景",
+      "used_by": ["n001", "n002"],
+      "status": "pending",
+      "hash": null,
+      "provider_hint": "seedream"
+    },
+    {
+      "asset_id": "spr_lin_default",
+      "kind": "portrait",
+      "ref": "char_lin",
+      "prompt": "中式恐怖画风，中年教师立绘，抱点名册，表情平静得过分，深色背景",
+      "used_by": ["n002"],
+      "status": "pending",
+      "hash": null,
+      "provider_hint": "seedream"
+    },
+    {
+      "asset_id": "voice_inner_n001_001",
+      "kind": "voice",
+      "ref": "char_chen",
+      "prompt": "内心独白：这是哪儿？我明明记得刚交完最后一科的卷子……（中性、压抑）",
+      "used_by": ["n001"],
+      "status": "pending",
+      "hash": null,
+      "provider_hint": "kokoro|cloud"
+    },
+    {
+      "asset_id": "bgm_anxious",
+      "kind": "bgm",
+      "ref": null,
+      "prompt": "低频弦乐，压抑渐强，可循环 60s",
+      "used_by": ["n001", "n002"],
+      "status": "pending",
+      "hash": null,
+      "provider_hint": "cc0_library"
+    },
+    {
+      "asset_id": "sfx_paper_turn",
+      "kind": "sfx",
+      "ref": null,
+      "prompt": "纸片批量翻动的沙沙声，约 0.8s",
+      "used_by": ["n001"],
+      "status": "pending",
+      "hash": null,
+      "provider_hint": "cc0_library"
+    },
+    {
+      "asset_id": "ui_choice_frame",
+      "kind": "ui",
+      "ref": null,
+      "prompt": "选择框 UI 边框，水墨风，半透明",
+      "used_by": ["c001"],
+      "status": "done",
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "provider_hint": "cc0_library"
+    }
+  ]
+}

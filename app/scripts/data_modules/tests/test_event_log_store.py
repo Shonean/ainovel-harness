@@ -25,7 +25,7 @@ def test_event_log_store_writes_per_chapter_file_and_sqlite_mirror(tmp_path):
                 "event_id": "evt-001",
                 "chapter": 3,
                 "event_type": "open_loop_created",
-                "subject": "出师之约",
+                "subject": "三年之约",
                 "payload": {},
             }
         ],
@@ -50,7 +50,7 @@ def test_event_log_store_generates_missing_event_id_and_chapter(tmp_path):
             {
                 "event_type": "open_loop_created",
                 "subject": "three_year_promise",
-                "payload": {"content": "出师之约提及"},
+                "payload": {"content": "三年之约提及"},
             }
         ],
     )
@@ -70,15 +70,15 @@ def test_event_log_store_normalizes_llm_alias_event_shape(tmp_path):
         [
             {
                 "type": "scene_open",
-                "characters": ["linyue"],
-                "payload": {"content": "林越推开石门，新的悬念出现"},
+                "characters": ["xiaoyan"],
+                "payload": {"content": "萧炎推开石门，新的悬念出现"},
             }
         ],
     )
 
     events = store.read_events(76)
     assert events[0]["event_type"] == "open_loop_created"
-    assert events[0]["subject"] == "linyue"
+    assert events[0]["subject"] == "xiaoyan"
     assert events[0]["chapter"] == 76
     assert events[0]["event_id"].startswith("evt-ch076-001-")
 
@@ -93,7 +93,7 @@ def test_event_log_store_rejects_unknown_event_type_after_normalization(tmp_path
                 {
                     "event_id": "evt-unknown",
                     "event_type": "not_a_story_event",
-                    "subject": "linyue",
+                    "subject": "xiaoyan",
                     "payload": {},
                 }
             ],
@@ -131,7 +131,7 @@ def test_event_log_store_rejects_blank_event_subject(tmp_path):
                 {
                     "event_type": "open_loop_created",
                     "subject": "   ",
-                    "payload": {"content": "出师之约提及"},
+                    "payload": {"content": "三年之约提及"},
                 }
             ],
         )
@@ -143,7 +143,7 @@ def test_event_log_store_ignores_duplicate_event_id(tmp_path):
         "event_id": "evt-001",
         "chapter": 3,
         "event_type": "open_loop_created",
-        "subject": "出师之约",
+        "subject": "三年之约",
         "payload": {},
     }
     store.write_events(3, [event])
@@ -219,7 +219,7 @@ def test_story_events_cli_reads_chapter_file(tmp_path, monkeypatch, capsys):
     events_dir = tmp_path / ".story-system" / "events"
     events_dir.mkdir(parents=True, exist_ok=True)
     (events_dir / "chapter_003.events.json").write_text(
-        '[{"event_id":"evt-001","chapter":3,"event_type":"open_loop_created","subject":"出师之约","payload":{}}]',
+        '[{"event_id":"evt-001","chapter":3,"event_type":"open_loop_created","subject":"三年之约","payload":{}}]',
         encoding="utf-8",
     )
 

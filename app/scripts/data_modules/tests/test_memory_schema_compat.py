@@ -23,9 +23,9 @@ def test_data_agent_output_accepts_memory_facts():
         "state_changes": [],
         "relationships_new": [],
         "memory_facts": {
-            "timeline_events": [{"event": "林越离开天云宗", "chapter": 12}],
+            "timeline_events": [{"event": "萧炎离开天云宗", "chapter": 12}],
             "world_rules": [{"rule": "修炼体系九境", "scope": "global"}],
-            "open_loops": [{"content": "出师之约", "status": "active"}],
+            "open_loops": [{"content": "三年之约", "status": "active"}],
             "reader_promises": [{"content": "纳兰嫣然会出场", "type": "encounter"}],
         },
     }

@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useRef, useState, Fragment } from 'react'
+import PromptModal, { askText } from '../components/PromptModal.jsx'
 import {
     fetchCurrentProject, fetchApiLibrary, applyApiPreset, applyApiEmbedPreset,
     fetchFilesTree, fetchFileContent, postFileWrite,
     phAiState, phAiElementsPut, phAiSettingsPut, phAiSettingsGenerate, phAiSettingFiles,
     phAiArcNew, phAiArcSelect, phAiArcStep, phAiArcConfirm, phAiArcSetActiveChapter,
-    phAiArcModify, phAiArcChat, phAiArcFinish, phAiArcRegenerateL5, phAiArcSetLevel, phAiArcUpdate,
+    phAiArcModify, phAiArcChat, phAiArcChatStream, phAiArcFinish, phAiArcRegenerateL5, phAiArcSetLevel, phAiArcUpdate,
     phAiArcDelete, phAiArcDeleteChapter, phAiArcChatApply,
     phAiArcSetTemplate, phAiInitStatus,
-    phAiElementPut, phAiElementDelete,
+    phAiElementPut, phAiElementDelete, phAiElementAdd,
     phAiChapterScore, phAiChapterPollution, phAiChapterFinalize,
     phFragmentParse, phFragmentUnderstand, phFragmentExpand, phFragmentFinalize,
     phAiBatchGenerate, phAiOptimizeStatus, phAiCancelTask,
     phTaskStatus,
-    phAiMemoryList, phAiMemoryAdd, phAiMemoryDelete,
+    phAiMemoryList,
+    phAiChatSessionsGet, phAiChatSessionsSave, phAiChatSessionsDelete,
     phAiSelAccessOptions,
     phAiShortDramas, phAiShortDramaAdd, phAiShortDramaFetch,
     phFragmentsPut, phNotesPut,
@@ -20,7 +22,9 @@ import {
     phAiPendingGet, phAiPendingApprove, phAiPendingReject,
 } from '../api.js'
 import BasicSettingsForm from '../components/BasicSettingsForm.jsx'
+import AdaptPanel from '../components/AdaptPanel.jsx'
 import ChatWindow from '../components/ChatWindow.jsx'
+import MemoryPanel from '../components/MemoryPanel.jsx'
 import L4BeatView from '../components/L4BeatView.jsx'
 import InsertToolbar from '../components/InsertToolbar.jsx'
 import SearchPanel from '../components/SearchPanel.jsx'
@@ -251,8 +255,17 @@ export default function AICreationPage() {
     const [scoreBusy, setScoreBusy] = useState(false)
     const [pollutionResult, setPollutionResult] = useState(null)
 
-    // 顶部模块切换：create（创作） | system（系统）
+    // 顶部模块切换：create（创作） | adapt（改编） | system（系统）
     const [tab, setTab] = useState('create')
+    // 深链：/ai-creation?tab=adapt（改编中心书卡/书级改编入口直达）
+    useEffect(() => {
+        const h = window.location.hash || ''
+        const qi = h.indexOf('?')
+        if (qi < 0) return
+        const t = new URLSearchParams(h.slice(qi + 1)).get('tab')
+        if (t === 'adapt' || t === 'create' || t === 'system') setTab(t)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [])
     // 创作内部子页（全屏浮层）：stats（概览浮层，备用） / inspire / fragment / pacing
     const [ovTab, setOvTab] = useState('stats')
     // 写作 hub 内部子页（保留备用）：大纲与章纲 / 章节生成
@@ -348,6 +361,98 @@ export default function AICreationPage() {
     useEffect(() => {
         if (bookRoot) loadMemory()
     }, [bookRoot, loadMemory])
+
+    // ── 【Phase 3】会话管理：工作台对话接入 chat-sessions 持久化 ─────────
+    // 与初始化助手（CreateBookPage）共用一份 chat_sessions.json，用 kind 隔离：
+    // 本页会话 kind='workbench'；回存时其它 kind（初始化助手等）原样带回去，互不覆盖。
+    const CHAT_SESSION_KIND = 'workbench'
+    const [chatSessions, setChatSessions] = useState([])    // [{id,title,arc_id,updated_at,kind,messages}]
+    const [chatSessionId, setChatSessionId] = useState('')  // '' = 新对话（首条消息时才建档）
+    const otherSessionsRef = useRef([])                     // 非 workbench 会话（保存时合并回存）
+    const chatSessionsLoadedRef = useRef(false)
+
+    const _chatTitle = (msgs) => {
+        const firstUser = (msgs || []).find(m => m.role === 'user')
+        const t = String(firstUser?.content || '').split('\n')[0].trim()
+        return (t || '新对话').slice(0, 20)
+    }
+
+    // 进书加载：workbench 会话进 state，其它 kind 留在 ref 备回存；默认恢复最近一段
+    useEffect(() => {
+        chatSessionsLoadedRef.current = false
+        if (!bookRoot) { setChatSessions([]); setChatSessionId(''); setMessages([]); return }
+        phAiChatSessionsGet(bookRoot).then(res => {
+            const all = Array.isArray(res?.sessions)
+                ? res.sessions.filter(s => s && s.id && Array.isArray(s.messages)) : []
+            otherSessionsRef.current = all.filter(s => (s.kind || 'init') !== CHAT_SESSION_KIND)
+            const wb = all.filter(s => (s.kind || 'init') === CHAT_SESSION_KIND)
+            setChatSessions(wb)
+            const latest = [...wb].sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')))[0]
+            if (latest) { setChatSessionId(latest.id); setMessages(latest.messages) }
+            chatSessionsLoadedRef.current = true
+        }).catch(() => { chatSessionsLoadedRef.current = true })
+    }, [bookRoot])
+
+    // 会话列表变化即全量回存（服务端备份；与其它 kind 会话合并）
+    useEffect(() => {
+        if (!bookRoot || !chatSessionsLoadedRef.current) return
+        phAiChatSessionsSave(bookRoot, [...otherSessionsRef.current, ...chatSessions]).catch(() => {})
+    }, [bookRoot, chatSessions])
+
+    // 把一段消息写进当前会话（title=首句截断，arc_id 随当前情节，updated_at 刷新）
+    const upsertChatSession = (msgs, sidOverride = '') => {
+        if (!msgs.length || !bookRoot) return
+        const sid = sidOverride || chatSessionId
+        if (!sid) return
+        const now = new Date().toISOString()
+        setChatSessions(prev => {
+            const item = { id: sid, title: _chatTitle(msgs), arc_id: activeArcId || '', updated_at: now, kind: CHAT_SESSION_KIND, messages: msgs }
+            return prev.some(s => s.id === sid)
+                ? prev.map(s => (s.id === sid ? { ...s, ...item } : s))
+                : [...prev, item]
+        })
+    }
+
+    const newChatSession = () => {
+        if (chatBusy) return
+        setChatSessionId(''); setMessages([]); setPendingConfirm(null)
+    }
+    const switchChatSession = (sid) => {
+        if (chatBusy || sid === chatSessionId) return
+        const target = chatSessions.find(s => s.id === sid)
+        if (!target) return
+        setChatSessionId(sid)
+        setMessages(Array.isArray(target.messages) ? target.messages : [])
+        setPendingConfirm(null)
+    }
+    const deleteChatSession = (sid) => {
+        if (chatBusy) return
+        setChatSessions(prev => prev.filter(s => s.id !== sid))
+        phAiChatSessionsDelete(bookRoot, sid).catch(() => {})
+        if (sid === chatSessionId) { setChatSessionId(''); setMessages([]); setPendingConfirm(null) }
+    }
+    // 消息级「删除这段对话」：删该消息及其配对消息（user+assistant 成对），全量回存
+    const deleteMessagePair = (idx) => {
+        if (chatBusy) return
+        const m = messages[idx]
+        if (!m) return
+        let start = idx, end = idx
+        if (m.role === 'user' && messages[idx + 1]?.role === 'assistant') end = idx + 1
+        else if (m.role === 'assistant' && messages[idx - 1]?.role === 'user') start = idx - 1
+        const next = [...messages.slice(0, start), ...messages.slice(end + 1)]
+        if (!next.length) {
+            // 删空了 → 本会话一并移除（服务端同步删）
+            if (chatSessionId) {
+                setChatSessions(prev => prev.filter(s => s.id !== chatSessionId))
+                phAiChatSessionsDelete(bookRoot, chatSessionId).catch(() => {})
+                setChatSessionId('')
+            }
+            setMessages([]); setPendingConfirm(null)
+            return
+        }
+        setMessages(next)
+        upsertChatSession(next)
+    }
 
     // ── 文档编辑器 state ──────────────────────────────────────
     const [docTree, setDocTree] = useState(null)
@@ -747,6 +852,7 @@ export default function AICreationPage() {
             if (r.arc?.template?.id) lastTpl = r.arc.template
         }
         setNewL1('')
+        setNewArcOpen(false) // 创建成功/失败都收起弹层：backdrop 会挡住整个舞台，不能留着
         if (lastArcId) {
             setActiveArcId(lastArcId)
             await refreshWorkbench(bookRoot)
@@ -767,7 +873,8 @@ export default function AICreationPage() {
 
     // 情节改名 / 删除（左栏情节项 hover 操作）
     const renameArc = async (a) => {
-        const name = window.prompt('情节新名字：', a.name)
+        // Electron 渲染进程不支持 window.prompt()，改用页面内弹窗（PromptModal）
+        const name = await askText('情节新名字：', a.name)
         if (!name || name.trim() === a.name) return
         const r = await run('改名情节', () => phAiArcUpdate(bookRoot, a.id, { name: name.trim() }))
         if (r?.ok) { setNotice('情节已改名'); await refreshWorkbench(bookRoot) }
@@ -827,8 +934,23 @@ export default function AICreationPage() {
     // 元素浮层保存 / 删除
     const saveElemEdit = async () => {
         if (!elemEdit) return
-        const { kind, id, name, alias, desc } = elemEdit
+        const { kind, id, name, alias, desc, isNew } = elemEdit
         const aliasArr = (alias || '').split(/[,，、\s]+/).filter(Boolean)
+        if (isNew) {
+            // 新建：POST 由后端生成 id；填了别名/术语再补一发更新
+            const r = await run('新建元素', () => phAiElementAdd(bookRoot, kind, { name: name || '', desc: desc || '' }))
+            if (r?.ok) {
+                const card = r.card
+                if (card?.id && aliasArr.length) {
+                    await run('保存别名', () => phAiElementPut(bookRoot, kind, card.id,
+                        kind === 'settings' ? { terms: aliasArr } : { alias: aliasArr }))
+                }
+                setNotice(`元素「${name || '未命名'}」已创建`)
+                setElemEdit(null)
+                await refreshWorkbench(bookRoot)
+            }
+            return
+        }
         const r = await run('保存元素', () => phAiElementPut(bookRoot, kind, id, {
             name: name || '', desc: desc || '',
             ...(kind === 'settings' ? { terms: aliasArr } : { alias: aliasArr }),
@@ -1111,23 +1233,60 @@ export default function AICreationPage() {
     // ── 对话（工具循环：预检索 + 可执行动作） ──────────────────────
     const handleChat = async (text) => {
         if (!text || chatBusy || !bookRoot) return
-        const history = [...messages, { role: 'user', content: text }]
+        // 【2026-09-07 讨论对象真注入】清零后端改动：讨论对象拼进消息文本，清除前每次发送都带上
+        let fullText = text
+        if (discuss) {
+            const excerpt = String(discuss.content || '').trim().slice(0, 200)
+            fullText = `【讨论对象：${discuss.name}】${excerpt ? '\n' + excerpt : ''}\n\n${text}`
+        }
+        const history = [...messages, { role: 'user', content: fullText }]
         setMessages(history)
         setChatBusy(true); setPendingConfirm(null)
 
         // 【2026-08-18】书级模式 或 书未初始化 → 走 init 模式（讨论全书设定/人物/世界观）
         const useInitMode = bookLevelMode || !(initStatus && initStatus.initialized)
         const arcId = useInitMode ? '' : (activeArcId || '')
+        // 【Phase 3】会话 id：首条消息时建档，之后稳定传给后端（单对话层工作记忆按它隔离注入）
+        const sid = chatSessionId || `cs_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`
+        if (!chatSessionId) setChatSessionId(sid)
+        upsertChatSession(history, sid)   // 先落用户消息（中途失败也留痕）
+
+        // 【Phase 4】流式：先插空气泡，token 增量拼接、工具/预检索行实时上屏；
+        // SSE 异常自动落回 REST（phAiArcChat），done 结果与 REST 同构 → 收尾逻辑共用。
+        const aiIdx = history.length
+        setMessages([...history, { role: 'assistant', content: '', tool_events: [], streaming: true }])
+        const patchAI = (upd) => setMessages(prev => {
+            const next = [...prev]
+            if (next[aiIdx]) {
+                const p = typeof upd === 'function' ? upd(next[aiIdx]) : upd
+                next[aiIdx] = { ...next[aiIdx], ...p }
+            }
+            return next
+        })
 
         try {
-            const r = await phAiArcChat(bookRoot, arcId, history, false, null, null, useInitMode ? 'init' : 'normal')
+            let r
+            const sres = await phAiArcChatStream(bookRoot, arcId, history, {
+                onToken: (t) => patchAI(m => ({ content: (m.content || '') + t })),
+                onToolCall: (ev) => patchAI(m => ({ tool_events: [...(m.tool_events || []), ev] })),
+            }, { mode: useInitMode ? 'init' : 'normal', session_id: sid })
+            if (sres.ok) {
+                r = sres.result
+            } else {
+                console.warn('[chat] 流式失败，落回 REST：', sres.error)
+                r = await phAiArcChat(bookRoot, arcId, history, false, null, null, useInitMode ? 'init' : 'normal', sid)
+            }
             if (r?.ok === false) {
-                setMessages([...history, { role: 'assistant', content: `（错误：${r.error}）` }])
+                const errs = [...history, { role: 'assistant', content: `（错误：${r.error}）` }]
+                setMessages(errs)
+                upsertChatSession(errs, sid)
                 return
             }
             const evs = r.tool_events || []
             const aiMsg = { role: 'assistant', content: r.reply || '', tool_events: evs }
-            setMessages([...history, aiMsg])
+            const finalMsgs = [...history, aiMsg]
+            setMessages(finalMsgs)
+            upsertChatSession(finalMsgs, sid)
             if (r.changed) {
                 await refreshWorkbench(bookRoot)
                 phAiInitStatus(bookRoot).then(setInitStatus).catch(() => setInitStatus(null))
@@ -1138,7 +1297,9 @@ export default function AICreationPage() {
             if (settingsNow?.initialized) setInitStatus(settingsNow)
             if (r.pending?.length) setPendingConfirm(r.pending[0])
         } catch (e) {
-            setMessages([...history, { role: 'assistant', content: `（对话失败：${e.message || e}）` }])
+            const errs = [...history, { role: 'assistant', content: `（对话失败：${e.message || e}）` }]
+            setMessages(errs)
+            upsertChatSession(errs, sid)
         } finally {
             setChatBusy(false)
         }
@@ -1216,7 +1377,8 @@ export default function AICreationPage() {
             return
         }
         // 其它内容工具：用户已同意 → 经 apply 端点真执行（args 为用户确认/编辑后的版本）
-        const r = await run('执行助手操作', () => phAiArcChatApply(bookRoot, activeArcId || '', tool, args))
+        // 【Phase 3】带 session_id：remember scope=session 的确认应用落到本会话工作记忆
+        const r = await run('执行助手操作', () => phAiArcChatApply(bookRoot, activeArcId || '', tool, args, chatSessionId))
         if (r?.ok) {
             if (r.event?.new_arc_id) setActiveArcId(r.event.new_arc_id)
             if (r.event?.summary) setNotice(r.event.summary)
@@ -1654,7 +1816,10 @@ export default function AICreationPage() {
                     disabled={!activeArcId && !(initStatus && !initStatus.initialized)}
                     pendingConfirm={pendingConfirm}
                     onConfirm={handleConfirmPending}
-                    onCancel={() => setPendingConfirm(null)} />
+                    onCancel={() => setPendingConfirm(null)}
+                    sessions={chatSessions} currentSessionId={chatSessionId}
+                    onNewSession={newChatSession} onSelectSession={switchChatSession} onDeleteSession={deleteChatSession}
+                    onDeleteMessage={deleteMessagePair} />
                 <SearchPanel bookRoot={bookRoot} onSendToChat={sendSearchToChat} title="检索" />
             </div>
         )
@@ -2003,7 +2168,10 @@ export default function AICreationPage() {
                             disabled={!activeArcId && !(initStatus && !initStatus.initialized)}
                             pendingConfirm={pendingConfirm}
                             onConfirm={handleConfirmPending}
-                            onCancel={() => setPendingConfirm(null)} />
+                            onCancel={() => setPendingConfirm(null)}
+                            sessions={chatSessions} currentSessionId={chatSessionId}
+                            onNewSession={newChatSession} onSelectSession={switchChatSession} onDeleteSession={deleteChatSession}
+                            onDeleteMessage={deleteMessagePair} />
                         <SearchPanel bookRoot={bookRoot} onSendToChat={sendSearchToChat} title="检索" />
             </div>
         )
@@ -3878,6 +4046,21 @@ export default function AICreationPage() {
         </div>
     )
 
+    // 「＋ 新建情节」弹层（fixed 居中）。create-stage 有两个 return 分支：
+    // 书级讨论模式（bookLevelMode 提前 return 书级总览）与情节模式——两个分支都必须挂载，
+    // 否则书级模式下总览页的「＋ 新建情节」按钮切换了状态但弹层永远不渲染（点了没反应）。
+    const renderNewArcPopup = () => !newArcOpen ? null : (
+        <div className="wb-newarc-backdrop" onClick={() => setNewArcOpen(false)}>
+            <div className="wb-newarc-pop" onClick={e => e.stopPropagation()}>
+                <div className="nap-head">
+                    新建情节
+                    <span className="nap-close" onClick={() => setNewArcOpen(false)}>✕</span>
+                </div>
+                {renderNewArcForm(true)}
+            </div>
+        </div>
+    )
+
     // 阶梯层 hover 操作：就地编辑 / 清空（l4 只清空；编辑走助手同意）
     const renderLevelOps = (lv, editDraft) => (
         <>
@@ -3902,28 +4085,19 @@ export default function AICreationPage() {
         </>
     )
 
-    // ── 书级总览（时间轴模式，左中合并）────
-    const [bookViewFilter, setBookViewFilter] = useState('all') // all/characters/items/settings/locations/notes
+    // ── 书级讨论模式左栏（2026-09-07 方案二：单页滚动 + 锚点 + 搜索过滤，窄条撤销）────
     const [bookSearch, setBookSearch] = useState('')
 
-    const renderBookOverview = () => {
-        // 资产导航项
-        const navItems = [
-            { key: 'all', icon: '', label: '全部', count: arcList.length + Object.values(elements || {}).flat().length },
-            { key: 'characters', icon: '', label: '角色', count: (elements.characters || []).length },
-            { key: 'items', icon: '', label: '物品', count: (elements.items || []).length },
-            { key: 'settings', icon: '', label: '设定', count: (elements.settings || []).length },
-            { key: 'locations', icon: '', label: '地点', count: (elements.locations || []).length },
-            { key: 'notes', icon: '', label: '备注', count: notes.filter(n => n.scope === 'global').length },
+    const renderBookLeft = () => {
+        const BK_KINDS = [
+            { key: 'characters', label: '角色' },
+            { key: 'items', label: '物品' },
+            { key: 'settings', label: '设定' },
+            { key: 'locations', label: '地点' },
+            { key: 'maps', label: '地图' },
         ]
 
-        // 筛选元素
-        const filterElems = (kind) => {
-            if (bookViewFilter === 'all') return true
-            return bookViewFilter === kind
-        }
-
-        // 获取某情节的元素（用于显示在节点下方）
+        // 获取某情节的元素（用于卡片云标签）
         const getArcElems = (arc) => {
             const result = []
             const sel = arc.selected || {}
@@ -3935,265 +4109,211 @@ export default function AICreationPage() {
             return result
         }
 
-        const filteredArcs = arcList.filter(a => {
-            if (!bookSearch.trim()) return true
-            const q = bookSearch.toLowerCase()
-            if (a.name?.toLowerCase().includes(q)) return true
-            if (a.l1?.toLowerCase().includes(q)) return true
-            const arcElems = getArcElems(a)
-            return arcElems.some(e => e.name?.toLowerCase().includes(q))
+        // 搜索过滤：全页统一（情节/元素/备注），空区整区隐藏
+        const q = bookSearch.trim().toLowerCase()
+        const match = (s) => !q || String(s || '').toLowerCase().includes(q)
+        const visArcs = arcList.filter(a => {
+            if (match(a.name) || match(a.l1)) return true
+            return getArcElems(a).some(e => match(e.name))
         })
+        const visKinds = BK_KINDS
+            .map(km => ({ ...km, list: (elements[km.key] || []).filter(e => match(e.name) || match(e.desc)) }))
+            .filter(km => km.list.length > 0)
+        const visNotes = notes.filter(n => n.scope === 'global' && match(n.text))
+        const jumpSec = (key) => document.getElementById('bk-sec-' + key)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        const anchors = [
+            ...(visArcs.length > 0 ? [{ key: 'arcs', label: '情节' }] : []),
+            ...visKinds.map(km => ({ key: km.key, label: km.label })),
+            { key: 'notes', label: '备注' },
+        ]
+        const bookEmpty = arcList.length === 0
+            && Object.values(elements || {}).flat().length === 0
+            && notes.filter(n => n.scope === 'global').length === 0
 
         return (
-            <div className="book-overview">
-                {/* 左侧资产导航窄条 */}
-                <div className="bo-asset-nav">
-                    {navItems.map(item => (
-                        <div key={item.key}
-                            className={`bo-an-item ${bookViewFilter === item.key ? 'active' : ''}`}
-                            onClick={() => setBookViewFilter(item.key)}
-                            title={item.label}>
-                            <span className="bo-an-lbl">{item.label}</span>
-                            {item.count > 0 && <span className="bo-an-cnt">{item.count}</span>}
-                        </div>
-                    ))}
-                    <div className="bo-an-item add-new" onClick={() => setNewArcOpen(v => !v)} title="新建情节">
-                        <span className="bo-an-ico">＋</span>
+            <div className="wb-bookleft">
+                {/* 头部：模式分段开关 + 搜索 + 新建情节 */}
+                <div className="bk-head">
+                    <div className="bk-seg">
+                        <span className="on">书级讨论</span>
+                        <span onClick={() => setBookLevelMode(false)}>情节讨论</span>
                     </div>
+                    <div className="bk-search">
+                        <input placeholder="搜索情节、元素、备注..." value={bookSearch}
+                            onChange={e => setBookSearch(e.target.value)} />
+                        {bookSearch && <span className="bk-search-x" onClick={() => setBookSearch('')}>✕</span>}
+                    </div>
+                    <button className="bo-new-arc" onClick={() => setNewArcOpen(true)}>＋ 新建情节</button>
                 </div>
 
-                {/* 主画布 */}
-                <div className="bo-canvas">
-                    <div className="bo-toolbar">
-                        <div className="bo-search">
-                            <span className="bo-search-glyph"></span>
-                            <input placeholder={bookViewFilter === 'all' ? '搜索情节、元素...' : '搜索...'}
-                                value={bookSearch}
-                                onChange={e => setBookSearch(e.target.value)} />
-                        </div>
-                        {bookViewFilter === 'all' && (
-                            <button className="bo-new-arc" onClick={() => setNewArcOpen(v => !v)}>＋ 新建情节</button>
-                        )}
-                        {['characters', 'items', 'settings', 'locations'].includes(bookViewFilter) && (
-                            <button className="bo-new-arc" onClick={() => {
-                                const kindMap = { characters: '角色', items: '物品', settings: '设定', locations: '地点' }
-                                // 触发新建元素（复用现有弹窗机制，先打开元素面板）
-                                setElemPopId(null)
-                                setElemEdit({ kind: bookViewFilter, isNew: true })
-                            }}>＋ 新建{({characters:'角色',items:'物品',settings:'设定',locations:'地点'})[bookViewFilter]}</button>
-                        )}
-                    </div>
+                {/* 锚点行（只列当前可见的区） */}
+                <div className="bk-anchors">
+                    {anchors.map(a => (
+                        <span key={a.key} className="bk-ank" onClick={() => jumpSec(a.key)}>{a.label}</span>
+                    ))}
+                </div>
 
-                    {/* 全部视图：时间轴 + 全局设定 */}
-                    {bookViewFilter === 'all' && (<>
-                    <div className="bo-timeline">
-                        {filteredArcs.length === 0 ? (
-                            <div className="bo-empty">
-                                <div style={{ fontSize: 40, marginBottom: 12 }}></div>
-                                <div style={{ fontSize: 13, color: 'var(--ink-sub)', marginBottom: 8 }}>
-                                    {bookSearch ? '没有找到匹配的内容' : '还没有情节，开始创建你的第一个故事吧'}
-                                </div>
-                                {!bookSearch && (
-                                    <button className="bo-new-arc" onClick={() => setNewArcOpen(v => !v)}>＋ 创建第一个情节</button>
-                                )}
+                {/* 单页主体：情节 → 全书元素 → 备注 */}
+                <div className="bk-body">
+                    {bookEmpty ? (
+                        <div className="bk-empty">
+                            <div style={{ fontSize: 40, marginBottom: 12 }}></div>
+                            <div style={{ fontSize: 13, color: 'var(--ink-sub)', marginBottom: 8 }}>
+                                还没有内容——和右侧助手聊设定、人物、世界观，或直接新建情节
                             </div>
-                        ) : (
-                            filteredArcs.map((arc, idx) => {
-                                const statusCls = arc.status === 'done' ? 'done' : arc.status === 'writing' ? 'doing' : 'todo'
-                                const statusText = arc.status === 'done' ? '已完成' : arc.status === 'writing' ? '进行中' : '待写'
-                                const arcElems = getArcElems(arc).filter(e => filterElems(e.kind))
-                                const chCount = (arc.chapters || []).length
-                                return (
-                                    <div key={arc.id} className={`bo-arc-node ${statusCls}`}>
-                                        <div className="bo-arc-left">
-                                            <div className="bo-arc-idx">第 {idx + 1} 章</div>
-                                            <div className={`bo-arc-badge ${statusCls}`}>{statusText}</div>
-                                        </div>
-                                        <div className="bo-arc-marker"></div>
-                                        <div className="bo-arc-right">
-                                            <div className="bo-arc-card"
-                                                onClick={() => { selectArc(arc.id); setBookLevelMode(false) }}>
-                                                <div className="bo-arc-title">{arc.name || `情节${idx + 1}`}</div>
-                                                {arc.l1 && <div className="bo-arc-summary">{arc.l1}</div>}
-                                                {chCount > 0 && (
-                                                    <div className="bo-arc-meta">{chCount} 章 · 约{(arc.word_count || 0).toLocaleString()}字</div>
-                                                )}
-
-                                                {/* 卡片工具栏（hover显示） */}
-                                                <div className="bo-arc-tools">
-                                                    <button className="bo-arc-tool chat"
-                                                        onClick={(ev) => {
-                                                            ev.stopPropagation()
-                                                            setDiscussTarget({
-                                                                kind: 'arc',
-                                                                arcId: arc.id,
-                                                                name: `情节「${arc.name}」`,
-                                                                content: `${arc.l1 || ''}`,
-                                                                icon: '',
-                                                            })
-                                                        }}>聊这个</button>
-                                                    <button className="bo-arc-tool enter"
-                                                        onClick={(ev) => {
-                                                            ev.stopPropagation()
-                                                            selectArc(arc.id)
-                                                            setBookLevelMode(false)
-                                                        }}>→ 进入</button>
+                            <button className="bo-new-arc" onClick={() => setNewArcOpen(true)}>＋ 创建第一个情节</button>
+                        </div>
+                    ) : (q && visArcs.length === 0 && visKinds.length === 0 && visNotes.length === 0) ? (
+                        <div className="bk-empty">
+                            <div style={{ fontSize: 13, color: 'var(--ink-sub)' }}>没有找到匹配的内容</div>
+                        </div>
+                    ) : (<>
+                        {/* 情节时间轴 */}
+                        {visArcs.length > 0 && (
+                            <section className="bk-sec" id="bk-sec-arcs">
+                                <div className="bk-sec-hd">
+                                    <span className="bk-sec-t">情节（{visArcs.length}）</span>
+                                </div>
+                                <div className="bo-timeline">
+                                    {visArcs.map((arc, idx) => {
+                                        const statusCls = arc.status === 'done' ? 'done' : arc.status === 'writing' ? 'doing' : 'todo'
+                                        const statusText = arc.status === 'done' ? '已完成' : arc.status === 'writing' ? '进行中' : '待写'
+                                        const arcElems = getArcElems(arc)
+                                        const chCount = (arc.chapters || []).length
+                                        return (
+                                            <div key={arc.id} className={`bo-arc-node ${statusCls}`}>
+                                                <div className="bo-arc-left">
+                                                    <div className="bo-arc-idx">第 {idx + 1} 章</div>
+                                                    <div className={`bo-arc-badge ${statusCls}`}>{statusText}</div>
                                                 </div>
+                                                <div className="bo-arc-marker"></div>
+                                                <div className="bo-arc-right">
+                                                    <div className="bo-arc-card"
+                                                        onClick={() => { selectArc(arc.id); setBookLevelMode(false) }}>
+                                                        <div className="bo-arc-title">{arc.name || `情节${idx + 1}`}</div>
+                                                        {arc.l1 && <div className="bo-arc-summary">{arc.l1}</div>}
+                                                        {chCount > 0 && (
+                                                            <div className="bo-arc-meta">{chCount} 章 · 约{(arc.word_count || 0).toLocaleString()}字</div>
+                                                        )}
 
-                                                {/* 元素云标签 */}
-                                                {arcElems.length > 0 && bookViewFilter !== 'notes' && (
-                                                    <div className="bo-element-cloud">
-                                                        {arcElems.slice(0, 6).map(e => {
-                                                            const kindClass = { characters: 'char', items: 'item', settings: 'setting', locations: 'loc' }[e.kind] || ''
-                                                            return (
-                                                                <span key={e.id} className={`bo-cloud-tag ${kindClass}`}
-                                                                    onClick={(ev) => { ev.stopPropagation(); setElemPopId(e.id) }}>
-                                                                    {e.name}
-                                                                </span>
-                                                            )
-                                                        })}
-                                                        {arcElems.length > 6 && (
-                                                            <span className="bo-cloud-tag add">+{arcElems.length - 6}</span>
+                                                        {/* 卡片工具栏（hover显示） */}
+                                                        <div className="bo-arc-tools">
+                                                            <button className="bo-arc-tool chat"
+                                                                onClick={(ev) => {
+                                                                    ev.stopPropagation()
+                                                                    setDiscussTarget({
+                                                                        kind: 'arc',
+                                                                        arcId: arc.id,
+                                                                        name: `情节「${arc.name}」`,
+                                                                        content: `${arc.l1 || ''}`,
+                                                                        icon: '',
+                                                                    })
+                                                                }}>聊这个</button>
+                                                            <button className="bo-arc-tool enter"
+                                                                onClick={(ev) => {
+                                                                    ev.stopPropagation()
+                                                                    selectArc(arc.id)
+                                                                    setBookLevelMode(false)
+                                                                }}>→ 进入</button>
+                                                        </div>
+
+                                                        {/* 元素云标签 */}
+                                                        {arcElems.length > 0 && (
+                                                            <div className="bo-element-cloud">
+                                                                {arcElems.slice(0, 6).map(e => {
+                                                                    const kindClass = { characters: 'char', items: 'item', settings: 'setting', locations: 'loc' }[e.kind] || ''
+                                                                    return (
+                                                                        <span key={e.id} className={`bo-cloud-tag ${kindClass}`}
+                                                                            onClick={(ev) => { ev.stopPropagation(); setElemPopId(e.id) }}>
+                                                                            {e.name}
+                                                                        </span>
+                                                                    )
+                                                                })}
+                                                                {arcElems.length > 6 && (
+                                                                    <span className="bo-cloud-tag add">+{arcElems.length - 6}</span>
+                                                                )}
+                                                            </div>
                                                         )}
                                                     </div>
-                                                )}
-                                            </div>
-                                        </div>
-                                    </div>
-                                )
-                            })
-                        )}
-
-                        {/* 新建情节节点（末尾占位，仅在有情节时显示） */}
-                        {filteredArcs.length > 0 && (
-                            <div className="bo-arc-node add-arc" onClick={() => setNewArcOpen(v => !v)}>
-                                <div className="bo-arc-left"></div>
-                                <div className="bo-arc-marker add">＋</div>
-                                <div className="bo-arc-right">
-                                    <div className="bo-arc-card add-hint">新建下一个情节...</div>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* 底部全书元素总览（all 视图时展示所有类型的元素） */}
-                    <div className="bo-global-section">
-                        <div className="bo-gs-title">全书元素</div>
-                        {[
-                            { key: 'characters', label: '角色', icon: '' },
-                            { key: 'items', label: '物品', icon: '' },
-                            { key: 'settings', label: '设定', icon: '' },
-                            { key: 'locations', label: '地点', icon: '' },
-                            { key: 'maps', label: '地图', icon: '' },
-                        ].map(km => {
-                            const list = elements[km.key] || []
-                            if (list.length === 0) return null
-                            return (
-                                <div key={km.key} className="bo-elem-block">
-                                    <div className="bo-block-hd" onClick={() => setBookViewFilter(km.key)}>
-                                        <span>{km.label}（{list.length}）</span>
-                                        <span className="bo-block-more">查看全部 →</span>
-                                    </div>
-                                    <div className="bo-gs-grid">
-                                        {list.slice(0, 6).map(e => (
-                                            <div key={e.id} className="bo-gs-card"
-                                                onClick={() => { setElemPopId(e.id) }}>
-                                                <div className="bo-gs-name">{e.name}</div>
-                                                <div className="bo-gs-desc">{(e.desc || '').slice(0, 60)}{(e.desc || '').length > 60 ? '…' : ''}</div>
-                                            </div>
-                                        ))}
-                                        {list.length > 6 && (
-                                            <div className="bo-gs-card more" onClick={() => setBookViewFilter(km.key)}>
-                                                <div className="bo-gs-name" style={{ color: 'var(--dai)', textAlign: 'center' }}>
-                                                    ＋{list.length - 6} 更多
                                                 </div>
                                             </div>
-                                        )}
-                                    </div>
-                                </div>
-                            )
-                        })}
-                        {Object.values(elements || {}).flat().length === 0 && (
-                            <div style={{ fontSize: 11, color: 'var(--ink-mute)', textAlign: 'center', padding: 20 }}>
-                                还没有元素
-                            </div>
-                        )}
-                    </div>
-                    </>)}
-
-                    {/* 元素分类视图：角色 / 物品 / 设定 / 地点 */}
-                    {['characters', 'items', 'settings', 'locations'].includes(bookViewFilter) && (() => {
-                        const list = (elements[bookViewFilter] || []).filter(e => {
-                            if (!bookSearch.trim()) return true
-                            return e.name?.toLowerCase().includes(bookSearch.toLowerCase())
-                        })
-                        const kindLabel = { characters: '角色', items: '物品', settings: '设定', locations: '地点' }[bookViewFilter]
-                        return (
-                            <div className="bo-elem-section">
-                                <div className="bo-gs-title">全部{kindLabel}（{list.length}）</div>
-                                {list.length === 0 ? (
-                                    <div className="bo-empty">
-                                        <div style={{ fontSize: 36, marginBottom: 10 }}></div>
-                                        <div style={{ fontSize: 12, color: 'var(--ink-mute)' }}>
-                                            {bookSearch ? '没有找到匹配的' + kindLabel : '还没有' + kindLabel + '，点击右上角新建'}
+                                        )
+                                    })}
+                                    <div className="bo-arc-node add-arc" onClick={() => setNewArcOpen(true)}>
+                                        <div className="bo-arc-left"></div>
+                                        <div className="bo-arc-marker add">＋</div>
+                                        <div className="bo-arc-right">
+                                            <div className="bo-arc-card add-hint">新建下一个情节...</div>
                                         </div>
                                     </div>
-                                ) : (
-                                    <div className="bo-gs-grid bo-elem-grid">
-                                        {list.map(e => (
-                                            <div key={e.id} className="bo-gs-card"
-                                                onClick={() => { setElemPopId(e.id) }}>
-                                                <div className="bo-gs-name">{e.name}</div>
-                                                <div className="bo-gs-desc">{(e.desc || '').slice(0, 80)}{(e.desc || '').length > 80 ? '…' : ''}</div>
-                                                {e.tags && e.tags.length > 0 && (
-                                                    <div style={{ marginTop: 4, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                                                        {e.tags.slice(0, 3).map((t, i) => (
-                                                            <span key={i} style={{ fontSize: 9, padding: '0 5px', borderRadius: 8, background: 'var(--paper-deep)', color: 'var(--ink-mute)' }}>{t}</span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )
-                    })()}
+                                </div>
+                            </section>
+                        )}
 
-                    {/* 备注视图 */}
-                    {bookViewFilter === 'notes' && (() => {
-                        const list = (notes || []).filter(n => {
-                            if (n.scope !== 'global') return false
-                            if (!bookSearch.trim()) return true
-                            return n.text?.toLowerCase().includes(bookSearch.toLowerCase())
-                        })
-                        return (
-                            <div className="bo-elem-section">
-                                <div className="bo-gs-title">全局备注（{list.length}）</div>
-                                {list.length === 0 ? (
-                                    <div className="bo-empty">
-                                        <div style={{ fontSize: 36, marginBottom: 10 }}></div>
-                                        <div style={{ fontSize: 12, color: 'var(--ink-mute)' }}>还没有全局备注</div>
-                                    </div>
-                                ) : (
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                                        {list.map(n => (
-                                            <div key={n.id} className="bo-gs-card" style={{ cursor: 'default' }}>
-                                                <div className="bo-gs-desc" style={{ fontSize: 12, color: 'var(--ink)', lineHeight: 1.7 }}>{n.text}</div>
-                                                {n.timestamp && (
-                                                    <div style={{ fontSize: 10, color: 'var(--ink-mute)', marginTop: 4 }}>{new Date(n.timestamp).toLocaleString()}</div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
+                        {/* 全书元素分区 */}
+                        {visKinds.map(km => (
+                            <section className="bk-sec" key={km.key} id={'bk-sec-' + km.key}>
+                                <div className="bk-sec-hd">
+                                    <span className="bk-sec-t">{km.label}（{km.list.length}）</span>
+                                    <button className="bk-add" onClick={() => {
+                                        setElemPopId(null)
+                                        setElemEdit({ kind: km.key, isNew: true, name: '', alias: '', desc: '' })
+                                    }}>＋ 新建</button>
+                                </div>
+                                <div className="bo-gs-grid bo-elem-grid">
+                                    {km.list.map(e => (
+                                        <div key={e.id} className="bo-gs-card" onClick={() => setElemPopId(e.id)}>
+                                            <div className="bo-gs-name">{e.name}</div>
+                                            <div className="bo-gs-desc">{(e.desc || '').slice(0, 80)}{(e.desc || '').length > 80 ? '…' : ''}</div>
+                                            {e.tags && e.tags.length > 0 && (
+                                                <div style={{ marginTop: 4, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                                                    {e.tags.slice(0, 3).map((t, i) => (
+                                                        <span key={i} style={{ fontSize: 9, padding: '0 5px', borderRadius: 8, background: 'var(--paper-deep)', color: 'var(--ink-mute)' }}>{t}</span>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        ))}
+
+                        {/* 全局备注（可添加） */}
+                        <section className="bk-sec" id="bk-sec-notes">
+                            <div className="bk-sec-hd">
+                                <span className="bk-sec-t">全局备注（{visNotes.length}）</span>
+                                <span className="bk-sec-tip">注入全书所有情节的生成</span>
                             </div>
-                        )
-                    })()}
+                            {visNotes.length === 0 ? (
+                                <div style={{ fontSize: 12, color: 'var(--ink-mute)', padding: '4px 2px 8px' }}>
+                                    {q ? '没有匹配的备注' : '还没有全局备注'}
+                                </div>
+                            ) : (
+                                <div className="bk-notes">
+                                    {visNotes.map(n => (
+                                        <div key={n.id} className="bo-gs-card bk-note" style={{ cursor: 'default' }}>
+                                            <div className="bo-gs-desc" style={{ fontSize: 12, color: 'var(--ink)', lineHeight: 1.7 }}>{n.text}</div>
+                                            {n.timestamp && (
+                                                <div style={{ fontSize: 10, color: 'var(--ink-mute)', marginTop: 4 }}>{new Date(n.timestamp).toLocaleString()}</div>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            <div className="bk-noteadd">
+                                <input value={newNoteInput} onChange={e => setNewNoteInput(e.target.value)}
+                                    onKeyDown={e => { if (e.key === 'Enter' && newNoteInput.trim()) addNote('global') }}
+                                    placeholder="输入全局备注，回车添加..." />
+                                <button onClick={() => { if (newNoteInput.trim()) addNote('global') }}>添加</button>
+                            </div>
+                        </section>
+                    </>)}
                 </div>
+                {renderNewArcPopup()}
             </div>
         )
     }
+
 
     // ── 创作 hub（概写合并：左情节侧栏 + 中五级阶梯 + 右操作台+全书数据）────
     const renderCreateHub = () => {
@@ -4407,433 +4527,13 @@ export default function AICreationPage() {
             }
             : null)
 
-        // 元素速览（打平，本情节参与的放前面标亮）
-        const kindMeta = [
-            { key: 'characters', label: '角色', emoji: '' },
-            { key: 'items', label: '物品', emoji: '' },
-            { key: 'settings', label: '设定', emoji: '' },
-            { key: 'locations', label: '地点', emoji: '' },
-            { key: 'maps', label: '地图', emoji: '' },
-        ]
-        const allElems = []
-        const selSet = {
-            characters: new Set(activeArc?.selected?.characters || []),
-            items: new Set(activeArc?.selected?.items || []),
-            settings: new Set(activeArc?.selected?.settings || []),
-        }
-        for (const km of kindMeta) {
-            for (const e of (elements[km.key] || [])) {
-                const inArc = selSet[km.key]?.has(e.id)
-                allElems.push({ ...e, kind: km.key, emoji: km.emoji, usage: elemUsageCount[e.id] || 0, inArc })
-            }
-        }
-        // 排序：本情节参与的在前，然后按使用次数
-        allElems.sort((a, b) => (b.inArc ? 1 : 0) - (a.inArc ? 1 : 0) || b.usage - a.usage)
-
         const activeIdx = arcList.findIndex(a => a.id === activeArcId)
 
-        // 书级模式：左中合并，返回时间轴总览
-        if (bookLevelMode) {
-            return (
-                <div className="wb-createstage book-level">
-                    {renderBookOverview()}
-                </div>
-            )
-        }
+        // 书级模式：中栏舞台不渲染（全部书级内容在 wb-bookleft 左栏，两栏布局 2026-09-07）
+        if (bookLevelMode) return null
 
         return (
             <div className="wb-createstage">
-
-                {/* 左：情节侧栏（三段式：情节树 + 元素速览 + 节奏迷你） */}
-                {!bookLevelMode && (
-                <aside className="wb-arcbar">
-                    {/* 情节模式左栏（原有内容） */}
-
-                    {/* 第一段：情节列表 */}
-                    <div className="wb-arbsec arcs">
-                        <div className="wb-arbhead">
-                            情节脉络
-                            <span className="cnt">{arcList.length} 情节</span>
-                        </div>
-                        <div className="wb-arbbody">
-                            <div className="wb-ablist">
-                                {arcList.length === 0 ? (
-                                    <div style={{ fontSize: 11, color: 'var(--ink-mute)', padding: 20, textAlign: 'center' }}>
-                                        还没有情节
-                                    </div>
-                                ) : (
-                                    arcList.map((a, i) => {
-                                        const sc = arcScores(a)
-                                        const als = ladderState(a)
-                                        const isActive = a.id === activeArcId
-                                        const statusCls = a.status === 'done' ? 'done' : a.status === 'writing' ? 'doing' : 'todo'
-                                        const statusText = a.status === 'done' ? '完' : a.status === 'writing' ? '进' : '待'
-                                        const chCount = (a.chapters || []).length
-                                        return (
-                                            <div key={a.id} className={`wb-abitem ${isActive ? 'active' : ''} ${discuss?.kind === 'arc' && discuss.arcId === a.id ? 'discussing' : ''}`}
-                                                onClick={() => { selectArc(a.id); setDiscussTarget({ kind: 'arc', arcId: a.id, name: `情节「${a.name}」`, content: `${a.l1 || ''}\n${a.l2 || ''}`.trim(), icon: '' }) }}>
-                                                <div className="abname">{a.name}</div>
-                                                <div className="abrange">{arcRange(a)}</div>
-                                                <div className="abmini">
-                                                    {als.map((s, j) => (
-                                                        <span key={j} className={s}></span>
-                                                    ))}
-                                                </div>
-                                                {sc && <span className="abscore">{sc.overall.toFixed(3).replace(/^0/, '')}</span>}
-                                                <span className={`abstat ${statusCls}`}>{statusText}</span>
-                                                <div className="ab-actions" onClick={e => e.stopPropagation()}>
-                                                    <span className="ab-act" title="改名" onClick={() => renameArc(a)}>改名</span>
-                                                    <span className="ab-act" title="删除情节" onClick={() => deleteArc(a)}>删除</span>
-                                                </div>
-                                            </div>
-                                        )
-                                    })
-                                )}
-                            </div>
-                        </div>
-                        <div className="wb-abfoot">
-                            <button className="newbtn" onClick={() => setNewArcOpen(v => !v)}>＋ 新建情节</button>
-                        </div>
-                    </div>
-
-                    {/* 第二段：元素与设定（卡片墙：元素富化卡 + 书级卡，深度融合去重） */}
-                    <div className="wb-arbsec elems">
-                        <div className="wb-arbhead">
-                            元素与设定
-                            <span className="cnt">{allElems.length}</span>
-                        </div>
-                        <div className="wb-arbbody">
-                            <div className="wb-ekindlist">
-                                {(() => {
-                                    // 按类型分组
-                                    const groups = [
-                                        { key: 'characters', label: '角色', icon: '', list: allElems.filter(e => e.kind === 'characters') },
-                                        { key: 'items', label: '物品', icon: '', list: allElems.filter(e => e.kind === 'items') },
-                                        { key: 'settings', label: '设定', icon: '', list: allElems.filter(e => e.kind === 'settings') },
-                                        { key: 'maps', label: '地图', icon: '', list: allElems.filter(e => e.kind === 'maps' || (e.kind === 'settings' && e.name.includes('图'))) },
-                                    ].filter(g => g.list.length > 0)
-                                    const sfiles = settingFiles?.files || []
-                                    const docOf = (name) => (sfiles.find(f => f.name === name) || {}).content || ''
-
-                                    if (groups.length === 0) {
-                                        return <div style={{ fontSize: 10.5, color: 'var(--ink-mute)', textAlign: 'center', padding: '12px 8px' }}>暂无元素</div>
-                                    }
-
-                                    return (
-                                        <>
-                                            {groups.map(g => {
-                                                const open = !!elemKindOpen[g.key]
-                                                return (
-                                                    <div key={g.key} className={`wb-ekind ${open ? 'open' : ''}`}>
-                                                        <div className="wb-ekhead" onClick={e => {
-                                                            e.stopPropagation()
-                                                            setElemKindOpen(prev => ({ ...prev, [g.key]: !prev[g.key] }))
-                                                        }}>
-<span className="ek-label">{g.label}</span>
-                                                            <span className="ek-cnt">{g.list.length}</span>
-                                                            <span className="ek-arr">{open ? '▾' : '▸'}</span>
-                                                        </div>
-                                                        {open && (
-                                                            <div className="wb-ekbody">
-                                                                <div className="wb-wallgrid">
-                                                                    {g.list.map(e => {
-                                                                        const isMap = e.kind === 'maps' || (e.kind === 'settings' && (e.name.includes('图') || e.name.includes('布局') || e.name.includes('地图')))
-                                                                        const isProto = g.key === 'characters' && !!settings?.protagonist?.name && settings.protagonist.name === e.name
-                                                                        const tags = Array.isArray(e.kind === 'settings' ? e.terms : e.alias) ? (e.kind === 'settings' ? e.terms : e.alias) : []
-                                                                        return (
-                                                                            <div key={e.id}
-                                                                                className={`wb-wcard ${e.inArc ? 'in' : ''} ${elemPopId === e.id ? 'active' : ''} ${isMap ? 'is-map' : ''} ${discuss?.kind === 'element' && discuss.elemId === e.id ? 'discussing' : ''}`}
-                                                                                onClick={(ev) => {
-                                                                                    ev.stopPropagation()
-                                                                                    if (isMap) {
-                                                                                        setMapViewId(mapViewId === e.id ? null : e.id)
-                                                                                        setElemPopId(null)
-                                                                                    } else {
-                                                                                        setMapViewId(null)
-                                                                                        setElemPopId(null)
-                                                                                        const tagLine = (Array.isArray(e.kind === 'settings' ? e.terms : e.alias) ? (e.kind === 'settings' ? e.terms : e.alias) : []).join('、')
-                                                                                        setDiscussTarget({ kind: 'element', elemId: e.id, name: `${g.label}·${e.name}`, content: `${e.desc || ''}${tagLine ? '\n别名/术语：' + tagLine : ''}`.trim(), icon: e.emoji })
-                                                                                    }
-                                                                                }}
-                                                                                title={`${g.label} · ${e.name}${e.inArc ? ' · 本情节参与' : ''}`}>
-                                                                                <div className="wc-head">
-<span className="wc-name">{e.name.split('（')[0]}</span>
-                                                                                    <span className="wc-kind">{g.label}</span>
-                                                                                    {e.inArc && <span className="wc-in">本情节✓</span>}
-                                                                                    <span className="wc-info" title="查看/编辑/删除"
-                                                                                        onClick={(ev) => {
-                                                                                            ev.stopPropagation(); setMapViewId(null)
-                                                                                            const aliasField = e.kind === 'settings' ? 'terms' : 'alias'
-                                                                                            setElemEdit({ kind: e.kind, id: e.id, name: e.name, alias: (Array.isArray(e[aliasField]) ? e[aliasField] : []).join('、'), desc: e.desc || '' })
-                                                                                            setElemPopId(elemPopId === e.id ? null : e.id)
-                                                                                        }}>ⓘ</span>
-                                                                                </div>
-                                                                                {e.desc && <div className="wc-desc">{e.desc}</div>}
-                                                                                {tags.length > 0 && (
-                                                                                    <div className="wc-tags">
-                                                                                        {tags.slice(0, 5).map(t => <span key={t} className="wc-tag">{t}</span>)}
-                                                                                    </div>
-                                                                                )}
-                                                                                {isProto && (
-                                                                                    <div className="wc-merge">
-                                                                                        主角卡 · 欲望：{settings?.protagonist?.desire || '—'} ／ 缺陷：{settings?.protagonist?.flaw || '—'}
-                                                                                    </div>
-                                                                                )}
-                                                                            </div>
-                                                                        )
-                                                                    })}
-                                                                </div>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                )
-                                            })}
-                                            {/* 书级卡：世界观 / 核心剧情 / 文风基调（文档并入元素后的剩余书级信息） */}
-                                            <div className="wb-bcards">
-                                                <div className="wb-bhead">书级</div>
-                                                <details className="wb-bcard">
-                                                    <summary>世界观</summary>
-                                                    {settings?.role_setting && <div className="wb-bcore">{settings.role_setting}</div>}
-                                                    {docOf('世界观') ? <pre className="wb-bpre">{docOf('世界观')}</pre> : <div className="wb-docempty">（暂无世界观文档）</div>}
-                                                </details>
-                                                <details className="wb-bcard">
-                                                    <summary>核心剧情</summary>
-                                                    {docOf('核心剧情') ? <pre className="wb-bpre">{docOf('核心剧情')}</pre> : <div className="wb-docempty">（暂无核心剧情文档）</div>}
-                                                </details>
-                                                <details className="wb-bcard">
-                                                    <summary>文风基调</summary>
-                                                    {settings?.style ? <pre className="wb-bpre">{settings.style}</pre> : <div className="wb-docempty">（未生成）</div>}
-                                                </details>
-                                            </div>
-                                        </>
-                                    )
-                                })()}
-                            </div>
-                        </div>
-                    </div>
-
-                    {/* 第三段：节奏概览（点击展开完整雷达） */}
-                    <div className={`wb-arbsec pacing ${paceExpand ? 'expanded' : ''}`}>
-                        <div className="wb-arbhead" style={{ cursor: 'pointer' }}
-                            onClick={() => setPaceExpand(!paceExpand)}>
-                            节奏概览
-                            <span className="cnt">{finChapters.length} 章 · {paceExpand ? '收起' : '展开'}</span>
-                        </div>
-                        {!paceExpand ? (
-                            <div className="wb-pacemini">
-                                <div className="pm-bars">
-                                    {Array.from({ length: Math.min(arcList.length, 20) }).map((_, i) => {
-                                        const a = arcList[i]
-                                        const chs = a?.chapters?.length || 0
-                                        const h = Math.max(8, Math.min(32, chs * 6 + 8))
-                                        const isCur = a?.id === activeArcId
-                                        const isDone = a?.status === 'done'
-                                        const cls = isDone ? 'done' : isCur ? 'cur' : ''
-                                        return <div key={i} className={`pm-bar ${cls}`} style={{ height: h + 'px' }} title={a?.name || ''} />
-                                    })}
-                                    {arcList.length === 0 && (
-                                        <div style={{ fontSize: 10, color: 'var(--ink-mute)', textAlign: 'center', width: '100%', padding: '8px 0' }}>暂无</div>
-                                    )}
-                                </div>
-                                <div className="pm-stats">
-                                    <span>字 <b>{(totalWords / 1000).toFixed(0)}k</b></span>
-                                    <span>均 <b>{overallAvg ? overallAvg.toFixed(2).replace(/^0/, '') : '—'}</b></span>
-                                    <span style={{ color: pollutedCount ? 'var(--cinnabar)' : 'var(--green)' }}>
-                                        污 <b>{pollutedCount}</b>
-                                    </span>
-                                </div>
-                            </div>
-                        ) : (
-                            <div className="wb-pacefull">
-                                {/* 展开版：完整节奏图（从 renderPacing 简化） */}
-                                <div className="pace-arc-list">
-                                    {arcList.map((a, i) => {
-                                        const chs = a.chapters || []
-                                        const sc = arcScores(a)
-                                        return (
-                                            <div key={a.id} className={`pace-arc-row ${a.id === activeArcId ? 'cur' : ''}`}>
-                                                <div className="pace-arc-name">{a.name}</div>
-                                                <div className="pace-arc-bars">
-                                                    {chs.length === 0 ? (
-                                                        <span className="pace-empty">未开始</span>
-                                                    ) : chs.map((c, ci) => (
-                                                        <div key={ci} className={`pace-ch-dot ${c.status || ''}`}
-                                                            title={`第${ci+1}章 ${c.title || ''}`} />
-                                                    ))}
-                                                </div>
-                                                {sc && <div className="pace-score">{sc.overall.toFixed(2).replace(/^0/, '')}</div>}
-                                            </div>
-                                        )
-                                    })}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-
-                    {/* 元素详情浮层（fixed 定位，向右弹出，不占左栏空间） */}
-                    {elemPopId && (() => {
-                        const e = allElems.find(x => x.id === elemPopId)
-                        if (!e) return null
-                        const kindMap = { characters: '角色', items: '物品', settings: '设定', locations: '地点', maps: '地图' }
-                        return (
-                            <div className="wb-epop" onClick={(ev) => ev.stopPropagation()}>
-                                <div className="epop-head">
-<div className="epop-title">
-                                        {elemEdit?.id === e.id ? (
-                                            <input className="epop-inp" value={elemEdit.name || ''} onChange={ev => setElemEdit({ ...elemEdit, name: ev.target.value })}
-                                                placeholder="元素名" style={{ width: 150, fontSize: 13, fontWeight: 600 }} />
-                                        ) : (
-                                            <div className="epop-name">{e.name}</div>
-                                        )}
-                                        <div className="epop-kind">{kindMap[e.kind] || e.kind}{e.inArc && <span className="epop-in">· 本情节参与</span>}</div>
-                                    </div>
-                                    <span className="epop-close" onClick={() => { setElemPopId(null); setElemEdit(null) }}>✕</span>
-                                </div>
-                                <div className="epop-row">
-                                    <span className="epop-k">{e.kind === 'settings' ? '术语' : '别名'}</span>
-                                    {elemEdit?.id === e.id ? (
-                                        <input className="epop-inp" value={elemEdit.alias || ''} onChange={ev => setElemEdit({ ...elemEdit, alias: ev.target.value })}
-                                            placeholder="逗号分隔" style={{ flex: 1 }} />
-                                    ) : (
-                                        <span className="epop-v">{(e.kind === 'settings' ? e.terms : e.alias)?.join(' / ') || '—'}</span>
-                                    )}
-                                </div>
-                                <div className="epop-row">
-                                    <span className="epop-k">简述</span>
-                                    {elemEdit?.id === e.id ? (
-                                        <textarea className="epop-inp" value={elemEdit.desc || ''} onChange={ev => setElemEdit({ ...elemEdit, desc: ev.target.value })}
-                                            rows={3} placeholder="身份与关键特质 / 用途 / 与剧情相关的关键设定"
-                                            style={{ flex: 1, fontSize: 12.5, lineHeight: 1.6, fontFamily: 'inherit', resize: 'vertical' }} />
-                                    ) : (
-                                        <span className="epop-v">{e.desc ? (e.desc.slice(0, 200) + (e.desc.length > 200 ? '…' : '')) : '—'}</span>
-                                    )}
-                                </div>
-                                {e.fields?.length > 0 && (
-                                    <div className="epop-fields">
-                                        {e.fields.slice(0, 6).map((f, i) => (
-                                            <div key={i} className="epop-field">
-                                                <span className="ef-k">{f.name}</span>
-                                                <span className="ef-v">{String(f.value || '').slice(0, 30)}</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                {e.relations?.length > 0 && (
-                                    <div className="epop-row">
-                                        <span className="epop-k">关系</span>
-                                        <span className="epop-v">
-                                            {e.relations.slice(0, 5).map((r, i) => {
-                                                const target = allElems.find(x => x.id === r.to_id)
-                                                const tname = target ? target.name.split('（')[0] : r.to_id
-                                                return (
-                                                    <span key={i} className="epop-rel">
-                                                        {r.name} → {tname}
-                                                    </span>
-                                                )
-                                            })}
-                                        </span>
-                                    </div>
-                                )}
-                                <div className="epop-actions" style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-                                    <button style={btnStyle(busy, false)} disabled={busy}
-                                        onClick={() => { const tagLine = (Array.isArray(e.alias) ? e.alias : []).join('、'); setElemPopId(null); setElemEdit(null); setDiscussTarget({ kind: 'element', elemId: e.id, name: `${kindMap[e.kind] || e.kind}·${e.name}`, content: `${e.desc || ''}${tagLine ? '\n别名：' + tagLine : ''}`.trim(), icon: e.emoji }) }}>
-                                        发 AI 讨论
-                                    </button>
-                                    {elemEdit?.id === e.id && (
-                                        <>
-                                            <button style={btnStyle(busy, true)} disabled={busy} onClick={saveElemEdit}>保存</button>
-                                            <button style={{ ...btnStyle(busy, false), color: 'var(--cinnabar-d)' }} disabled={busy} onClick={deleteElem}>删除</button>
-                                        </>
-                                    )}
-                                </div>
-                            </div>
-                        )
-                    })()}
-
-                    {/* 地图大预览面板（fixed 定位，浮在所有内容之上） */}
-                    {mapViewId && (() => {
-                        const m = allElems.find(x => x.id === mapViewId)
-                        if (!m) return null
-                        const places = (m.fields || [])
-                            .filter(f => f.name && f.value)
-                            .map(f => ({ name: f.name, desc: String(f.value || '').slice(0, 30) }))
-                        const extraPlaces = places.length < 3 && m.desc
-                            ? m.desc.split(/[。，；\n]/).filter(s => s.length > 2 && s.length < 12).slice(0, 6).map(s => ({ name: s, desc: '' }))
-                            : []
-                        const allPlaces = [...places, ...extraPlaces].slice(0, 12)
-                        return (
-                            <div className="wb-mapview wb-mapview-fixed" onClick={e => e.stopPropagation()}>
-                                <div className="mv-head">
-                                    <span className="mv-title">{m.name}</span>
-                                    <span className="mv-close" onClick={() => setMapViewId(null)}>✕</span>
-                                </div>
-                                <div className="mv-canvas">
-                                    <svg viewBox="0 0 400 300" className="mv-svg" preserveAspectRatio="xMidYMid meet">
-                                        <rect width="400" height="300" fill="#f7f2e6" />
-                                        <path d="M0,120 Q40,80 80,110 T160,95 T240,105 T320,90 T400,100 L400,140 L0,140 Z"
-                                            fill="#d6d0c0" opacity="0.4" />
-                                        <path d="M0,140 Q60,100 120,130 T240,115 T360,125 T400,115 L400,160 L0,160 Z"
-                                            fill="#c8c0a8" opacity="0.3" />
-                                        <path d="M50,30 Q80,80 60,140 T90,220 T70,280"
-                                            stroke="#8ba4b0" strokeWidth="8" fill="none" opacity="0.5" strokeLinecap="round" />
-                                        <path d="M350,20 Q320,70 340,130 T310,210 T330,280"
-                                            stroke="#8ba4b0" strokeWidth="6" fill="none" opacity="0.4" strokeLinecap="round" />
-                                        <rect x="140" y="130" width="120" height="80" fill="#f0e6d0" stroke="#8b7355" strokeWidth="1.5" rx="2" />
-                                        <line x1="200" y1="130" x2="200" y2="210" stroke="#a89070" strokeWidth="0.5" strokeDasharray="3,3" />
-                                        <line x1="140" y1="170" x2="260" y2="170" stroke="#a89070" strokeWidth="0.5" strokeDasharray="3,3" />
-                                        <rect x="192" y="126" width="16" height="8" fill="#8b7355" rx="1" />
-                                        <rect x="192" y="206" width="16" height="8" fill="#8b7355" rx="1" />
-                                        {allPlaces.slice(0, 8).map((p, i) => {
-                                            const positions = [
-                                                [80, 60], [300, 50], [60, 200], [320, 180],
-                                                [180, 160], [230, 160], [150, 240], [280, 250]
-                                            ]
-                                            const [cx, cy] = positions[i] || [100 + i * 40, 150]
-                                            return (
-                                                <g key={i}>
-                                                    <circle cx={cx} cy={cy} r="4" fill="#b8432c" opacity="0.8" />
-                                                    <circle cx={cx} cy={cy} r="8" fill="none" stroke="#b8432c" strokeWidth="0.8" opacity="0.4" />
-                                                    <text x={cx + 8} y={cy + 3} fontSize="10" fill="#4a3c2a" fontFamily="serif" fontWeight="600">
-                                                        {p.name.slice(0, 6)}
-                                                    </text>
-                                                </g>
-                                            )
-                                        })}
-                                        <g transform="translate(365, 40)">
-                                            <circle r="14" fill="none" stroke="#7a6a4f" strokeWidth="0.8" />
-                                            <polygon points="0,-10 3,0 0,10 -3,0" fill="#b8432c" />
-                                            <text y="-16" textAnchor="middle" fontSize="9" fill="#7a6a4f" fontFamily="serif" fontWeight="700">北</text>
-                                        </g>
-                                        <g transform="translate(20, 275)">
-                                            <line x1="0" y1="0" x2="60" y2="0" stroke="#7a6a4f" strokeWidth="1" />
-                                            <line x1="0" y1="-3" x2="0" y2="3" stroke="#7a6a4f" strokeWidth="1" />
-                                            <line x1="30" y1="-2" x2="30" y2="2" stroke="#7a6a4f" strokeWidth="0.8" />
-                                            <line x1="60" y1="-3" x2="60" y2="3" stroke="#7a6a4f" strokeWidth="1" />
-                                            <text x="30" y="14" textAnchor="middle" fontSize="8" fill="#7a6a4f" fontFamily="serif">十里</text>
-                                        </g>
-                                    </svg>
-                                </div>
-                                {m.desc && <div className="mv-desc">{m.desc}</div>}
-                                {allPlaces.length > 0 && (
-                                    <div className="mv-places">
-                                        <div className="mv-pk">地点索引</div>
-                                        <div className="mv-plist">
-                                            {allPlaces.map((p, i) => (
-                                                <div key={i} className="mv-pitem">
-                                                    <span className="mv-pdot"></span>
-                                                    <span className="mv-pname">{p.name}</span>
-                                                    {p.desc && <span className="mv-pdesc">{p.desc}</span>}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                            </div>
-                        )
-                    })()}
-
-                </aside>
-                )}
 
                 {/* 中：五级阶梯主舞台 */}
                 <main className="wb-createmain">
@@ -4950,133 +4650,6 @@ export default function AICreationPage() {
                     )}
                     </div>
                 )}
-
-                    {/* 书级讨论模式：叠加在阶梯上方 */}
-                    {bookLevelMode && (
-                        <div className="wb-booklevel">
-                            {/* 书籍信息卡片 */}
-                            <div className="wb-bl-card">
-                                <div className="wb-bl-header">
-                                                                        <span className="wb-bl-title">{bookTitle || '未命名书'}</span>
-                                </div>
-                                <div className="wb-bl-stats">
-                                    <div className="wb-bl-stat">
-                                                                                <span className="wb-bl-stat-label">类型</span>
-                                        <span className="wb-bl-stat-value">{settings?.genre || '未设定'}</span>
-                                    </div>
-                                    <div className="wb-bl-stat">
-                                                                                <span className="wb-bl-stat-label">情节</span>
-                                        <span className="wb-bl-stat-value">{arcList.length} 个</span>
-                                    </div>
-                                    <div className="wb-bl-stat">
-                                                                                <span className="wb-bl-stat-label">章节</span>
-                                        <span className="wb-bl-stat-value">{arcs.next_chapter_num - 1} 章</span>
-                                    </div>
-                                    <div className="wb-bl-stat">
-                                                                                <span className="wb-bl-stat-label">角色</span>
-                                        <span className="wb-bl-stat-value">{(elements.characters || []).length} 个</span>
-                                    </div>
-                                    <div className="wb-bl-stat">
-                                                                                <span className="wb-bl-stat-label">物品</span>
-                                        <span className="wb-bl-stat-value">{(elements.items || []).length} 个</span>
-                                    </div>
-                                    <div className="wb-bl-stat">
-                                                                                <span className="wb-bl-stat-label">设定</span>
-                                        <span className="wb-bl-stat-value">{(elements.settings || []).length} 个</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* 书级讨论引导 */}
-                            <div className="wb-bl-guide">
-                                <div className="wb-bl-guide-title">书级讨论 — 快捷话题</div>
-                                <div className="wb-bl-guide-desc">点击话题直接发送给AI讨论，或在右侧对话框自由提问</div>
-                                <div className="wb-bl-topics">
-                                    <button className="wb-bl-topic" onClick={() => handleChat('帮我设计一个完整的世界观，包括势力分布、修炼体系、地理环境等')}>
-                                        设计世界观
-                                    </button>
-                                    <button className="wb-bl-topic" onClick={() => handleChat('帮我创建主要人物角色，包括主角、配角、反派等')}>
-                                        创建人物角色
-                                    </button>
-                                    <button className="wb-bl-topic" onClick={() => handleChat('帮我设计故事发生的地图和地理环境')}>
-                                        设计地图
-                                    </button>
-                                    <button className="wb-bl-topic" onClick={() => handleChat('帮我规划这本书的主线剧情和核心冲突')}>
-                                        规划主线剧情
-                                    </button>
-                                    <button className="wb-bl-topic" onClick={() => handleChat('帮我设计书中的关键物品、法宝或道具')}>
-                                        设计关键物品
-                                    </button>
-                                    <button className="wb-bl-topic" onClick={() => handleChat('帮我梳理人物关系图和势力关系')}>
-                                        梳理人物关系
-                                    </button>
-                                </div>
-                            </div>
-
-                            {/* 情节列表（如果有情节的话显示，方便选择） */}
-                            {arcList.length > 0 && (
-                                <div className="wb-bl-card" style={{ marginTop: 16 }}>
-                                    <div className="wb-bl-header">
-                                                                                <span className="wb-bl-title">已有情节（点击选择）</span>
-                                    </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                                        {arcList.map((arc, idx) => (
-                                            <div key={arc.id}
-                                                onClick={() => setActiveArcId(arc.id)}
-                                                style={{
-                                                    padding: '10px 14px', border: '1px solid var(--line)', borderRadius: 6,
-                                                    background: 'var(--paper)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                                }}>
-                                                <div>
-                                                    <span style={{ fontWeight: 600, fontSize: 13 }}>{arc.name || `情节${idx + 1}`}</span>
-                                                    <span style={{ fontSize: 11, color: 'var(--ink-mute)', marginLeft: 8 }}>{arc.l1 || '（未设定l1）'}</span>
-                                                </div>
-                                                <span style={{ fontSize: 11, color: 'var(--dai)' }}>点击选择 →</span>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* 全局备注 */}
-                            <div className="wb-bl-card" style={{ marginTop: 16 }}>
-                                <div className="wb-bl-header">
-                                                                        <span className="wb-bl-title">全局备注</span>
-                                    <span style={{ fontSize: 11, color: 'var(--ink-mute)', marginLeft: 'auto' }}>注入全书所有情节的生成</span>
-                                </div>
-                                {notes.filter(n => n.scope === 'global').length === 0 ? (
-                                    <div style={{ fontSize: 12, color: 'var(--ink-mute)', padding: 8, textAlign: 'center' }}>暂无全局备注</div>
-                                ) : (
-                                    notes.filter(n => n.scope === 'global').map(n => (
-                                        <div key={n.id} style={{ padding: '6px 10px', marginBottom: 6, borderRadius: 4, borderLeft: '3px solid var(--green)', background: 'var(--green-wash)', fontSize: 12 }}>
-                                            <b>{n.key || '备注'}</b>：{n.text}
-                                        </div>
-                                    ))
-                                )}
-                                <div style={{ marginTop: 8 }}>
-                                    <div style={{ display: 'flex', gap: 4 }}>
-                                        <input
-                                            value={newNoteInput}
-                                            onChange={e => setNewNoteInput(e.target.value)}
-                                            onKeyDown={e => { if (e.key === 'Enter' && newNoteInput.trim()) { addNote('global', newNoteInput.trim()); setNewNoteInput('') } }}
-                                            placeholder="输入全局备注..."
-                                            style={{ flex: 1, padding: '4px 8px', border: '1px solid var(--line)', borderRadius: 4, fontSize: 12, background: 'var(--bg)', color: 'var(--ink)' }}
-                                        />
-                                        <button className="btn btn-small" onClick={() => { if (newNoteInput.trim()) { addNote('global', newNoteInput.trim()); setNewNoteInput('') } }}>添加</button>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* 快捷操作 */}
-                            <div className="wb-bl-actions">
-                                {activeArc && (
-                                    <button className="btn btn-small" onClick={() => setBookLevelMode(false)}>
-                                        切换到情节模式
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                    )}
 
                     {arcList.length === 0 && !bookLevelMode && (
                         <div className="wb-emptyguide">
@@ -5248,18 +4821,8 @@ export default function AICreationPage() {
                     )}
                 </main>
 
-                {/* 「＋ 新建情节」弹层（左栏按钮触发，fixed 居中） */}
-                {newArcOpen && (
-                    <div className="wb-newarc-backdrop" onClick={() => setNewArcOpen(false)}>
-                        <div className="wb-newarc-pop" onClick={e => e.stopPropagation()}>
-                            <div className="nap-head">
-                                新建情节
-                                <span className="nap-close" onClick={() => setNewArcOpen(false)}>✕</span>
-                            </div>
-                            {renderNewArcForm(true)}
-                        </div>
-                    </div>
-                )}
+                {/* 「＋ 新建情节」弹层（左栏按钮触发，fixed 居中；书级模式分支另挂载一份） */}
+                {renderNewArcPopup()}
 
                 {/* 层级确认浮层：step_ladder 生成后审阅/确认/重生成/对话修改（借鉴 codex overlay） */}
                 <LevelConfirmOverlay
@@ -5817,7 +5380,7 @@ export default function AICreationPage() {
                     <>
                         <div className="wb-sixsrc">
                             <div className="wb-srcrow"><span className="sdot ok"></span><span className="sn">本书索引</span><span className="sv">{finChapters.length} 章</span></div>
-                            <div className="wb-srcrow"><span className="sdot ok"></span><span className="sn">语料持久</span><span className="sv">语料 500 章</span></div>
+                            <div className="wb-srcrow"><span className="sdot ok"></span><span className="sn">语料持久</span><span className="sv">青山 500</span></div>
                             <div className="wb-srcrow"><span className="sdot ok"></span><span className="sn">模板库</span><span className="sv">已有</span></div>
                             <div className="wb-srcrow"><span className="sdot no"></span><span className="sn">CSV 数据</span><span className="sv">未配置</span></div>
                             <div className="wb-srcrow"><span className="sdot no"></span><span className="sn">参考文档</span><span className="sv">空</span></div>
@@ -6087,6 +5650,437 @@ export default function AICreationPage() {
         }
     }
 
+    // 元素速览数据（原 renderCreateHub 局部；随情节侧栏外移提升到组件级，侧栏/中栏共用）
+    const kindMeta = [
+        { key: 'characters', label: '角色', emoji: '' },
+        { key: 'items', label: '物品', emoji: '' },
+        { key: 'settings', label: '设定', emoji: '' },
+        { key: 'locations', label: '地点', emoji: '' },
+        { key: 'maps', label: '地图', emoji: '' },
+    ]
+    const allElems = []
+    {
+        const selSet = {
+            characters: new Set(activeArc?.selected?.characters || []),
+            items: new Set(activeArc?.selected?.items || []),
+            settings: new Set(activeArc?.selected?.settings || []),
+        }
+        for (const km of kindMeta) {
+            for (const e of (elements[km.key] || [])) {
+                const inArc = selSet[km.key]?.has(e.id)
+                allElems.push({ ...e, kind: km.key, emoji: km.emoji, usage: elemUsageCount[e.id] || 0, inArc })
+            }
+        }
+        // 排序：本情节参与的在前，然后按使用次数
+        allElems.sort((a, b) => (b.inArc ? 1 : 0) - (a.inArc ? 1 : 0) || b.usage - a.usage)
+    }
+
+    // 情节侧栏（三段式：情节树 + 元素速览 + 节奏迷你）——布局调整：挂到 wb-body 层、创作助手左侧
+    const renderArcBar = () => (
+                <aside className="wb-arcbar">
+                    {/* 情节模式左栏（原有内容） */}
+
+                    {/* 第一段：情节列表 */}
+                    <div className="wb-arbsec arcs">
+                        <div className="wb-arbhead">
+                            情节脉络
+                            <span className="cnt">{arcList.length} 情节</span>
+                        </div>
+                        <div className="wb-arbbody">
+                            <div className="wb-ablist">
+                                {arcList.length === 0 ? (
+                                    <div style={{ fontSize: 11, color: 'var(--ink-mute)', padding: 20, textAlign: 'center' }}>
+                                        还没有情节
+                                    </div>
+                                ) : (
+                                    arcList.map((a, i) => {
+                                        const sc = arcScores(a)
+                                        const als = ladderState(a)
+                                        const isActive = a.id === activeArcId
+                                        const statusCls = a.status === 'done' ? 'done' : a.status === 'writing' ? 'doing' : 'todo'
+                                        const statusText = a.status === 'done' ? '完' : a.status === 'writing' ? '进' : '待'
+                                        const chCount = (a.chapters || []).length
+                                        return (
+                                            <div key={a.id} className={`wb-abitem ${isActive ? 'active' : ''} ${discuss?.kind === 'arc' && discuss.arcId === a.id ? 'discussing' : ''}`}
+                                                onClick={() => { selectArc(a.id); setDiscussTarget({ kind: 'arc', arcId: a.id, name: `情节「${a.name}」`, content: `${a.l1 || ''}\n${a.l2 || ''}`.trim(), icon: '' }) }}>
+                                                <div className="abname">{a.name}</div>
+                                                <div className="abrange">{arcRange(a)}</div>
+                                                <div className="abmini">
+                                                    {als.map((s, j) => (
+                                                        <span key={j} className={s}></span>
+                                                    ))}
+                                                </div>
+                                                {sc && <span className="abscore">{sc.overall.toFixed(3).replace(/^0/, '')}</span>}
+                                                <span className={`abstat ${statusCls}`}>{statusText}</span>
+                                                <div className="ab-actions" onClick={e => e.stopPropagation()}>
+                                                    <span className="ab-act" title="改名" onClick={() => renameArc(a)}>改名</span>
+                                                    <span className="ab-act" title="删除情节" onClick={() => deleteArc(a)}>删除</span>
+                                                </div>
+                                            </div>
+                                        )
+                                    })
+                                )}
+                            </div>
+                        </div>
+                        <div className="wb-abfoot">
+                            <button className="newbtn" onClick={() => setNewArcOpen(true)}>＋ 新建情节</button>
+                        </div>
+                    </div>
+
+                    {/* 第二段：元素与设定（卡片墙：元素富化卡 + 书级卡，深度融合去重） */}
+                    <div className="wb-arbsec elems">
+                        <div className="wb-arbhead">
+                            元素与设定
+                            <span className="cnt">{allElems.length}</span>
+                        </div>
+                        <div className="wb-arbbody">
+                            <div className="wb-ekindlist">
+                                {(() => {
+                                    // 按类型分组
+                                    const groups = [
+                                        { key: 'characters', label: '角色', icon: '', list: allElems.filter(e => e.kind === 'characters') },
+                                        { key: 'items', label: '物品', icon: '', list: allElems.filter(e => e.kind === 'items') },
+                                        { key: 'settings', label: '设定', icon: '', list: allElems.filter(e => e.kind === 'settings') },
+                                        { key: 'maps', label: '地图', icon: '', list: allElems.filter(e => e.kind === 'maps' || (e.kind === 'settings' && e.name.includes('图'))) },
+                                    ].filter(g => g.list.length > 0)
+                                    const sfiles = settingFiles?.files || []
+                                    const docOf = (name) => (sfiles.find(f => f.name === name) || {}).content || ''
+
+                                    if (groups.length === 0) {
+                                        return <div style={{ fontSize: 10.5, color: 'var(--ink-mute)', textAlign: 'center', padding: '12px 8px' }}>暂无元素</div>
+                                    }
+
+                                    return (
+                                        <>
+                                            {groups.map(g => {
+                                                const open = !!elemKindOpen[g.key]
+                                                return (
+                                                    <div key={g.key} className={`wb-ekind ${open ? 'open' : ''}`}>
+                                                        <div className="wb-ekhead" onClick={e => {
+                                                            e.stopPropagation()
+                                                            setElemKindOpen(prev => ({ ...prev, [g.key]: !prev[g.key] }))
+                                                        }}>
+<span className="ek-label">{g.label}</span>
+                                                            <span className="ek-cnt">{g.list.length}</span>
+                                                            <span className="ek-arr">{open ? '▾' : '▸'}</span>
+                                                        </div>
+                                                        {open && (
+                                                            <div className="wb-ekbody">
+                                                                <div className="wb-wallgrid">
+                                                                    {g.list.map(e => {
+                                                                        const isMap = e.kind === 'maps' || (e.kind === 'settings' && (e.name.includes('图') || e.name.includes('布局') || e.name.includes('地图')))
+                                                                        const isProto = g.key === 'characters' && !!settings?.protagonist?.name && settings.protagonist.name === e.name
+                                                                        const tags = Array.isArray(e.kind === 'settings' ? e.terms : e.alias) ? (e.kind === 'settings' ? e.terms : e.alias) : []
+                                                                        return (
+                                                                            <div key={e.id}
+                                                                                className={`wb-wcard ${e.inArc ? 'in' : ''} ${elemPopId === e.id ? 'active' : ''} ${isMap ? 'is-map' : ''} ${discuss?.kind === 'element' && discuss.elemId === e.id ? 'discussing' : ''}`}
+                                                                                onClick={(ev) => {
+                                                                                    ev.stopPropagation()
+                                                                                    if (isMap) {
+                                                                                        setMapViewId(mapViewId === e.id ? null : e.id)
+                                                                                        setElemPopId(null)
+                                                                                    } else {
+                                                                                        setMapViewId(null)
+                                                                                        setElemPopId(null)
+                                                                                        const tagLine = (Array.isArray(e.kind === 'settings' ? e.terms : e.alias) ? (e.kind === 'settings' ? e.terms : e.alias) : []).join('、')
+                                                                                        setDiscussTarget({ kind: 'element', elemId: e.id, name: `${g.label}·${e.name}`, content: `${e.desc || ''}${tagLine ? '\n别名/术语：' + tagLine : ''}`.trim(), icon: e.emoji })
+                                                                                    }
+                                                                                }}
+                                                                                title={`${g.label} · ${e.name}${e.inArc ? ' · 本情节参与' : ''}`}>
+                                                                                <div className="wc-head">
+<span className="wc-name">{e.name.split('（')[0]}</span>
+                                                                                    <span className="wc-kind">{g.label}</span>
+                                                                                    {e.inArc && <span className="wc-in">本情节✓</span>}
+                                                                                    <span className="wc-info" title="查看/编辑/删除"
+                                                                                        onClick={(ev) => {
+                                                                                            ev.stopPropagation(); setMapViewId(null)
+                                                                                            const aliasField = e.kind === 'settings' ? 'terms' : 'alias'
+                                                                                            setElemEdit({ kind: e.kind, id: e.id, name: e.name, alias: (Array.isArray(e[aliasField]) ? e[aliasField] : []).join('、'), desc: e.desc || '' })
+                                                                                            setElemPopId(elemPopId === e.id ? null : e.id)
+                                                                                        }}>ⓘ</span>
+                                                                                </div>
+                                                                                {e.desc && <div className="wc-desc">{e.desc}</div>}
+                                                                                {tags.length > 0 && (
+                                                                                    <div className="wc-tags">
+                                                                                        {tags.slice(0, 5).map(t => <span key={t} className="wc-tag">{t}</span>)}
+                                                                                    </div>
+                                                                                )}
+                                                                                {isProto && (
+                                                                                    <div className="wc-merge">
+                                                                                        主角卡 · 欲望：{settings?.protagonist?.desire || '—'} ／ 缺陷：{settings?.protagonist?.flaw || '—'}
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+                                                                        )
+                                                                    })}
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                )
+                                            })}
+                                            {/* 书级卡：世界观 / 核心剧情 / 文风基调（文档并入元素后的剩余书级信息） */}
+                                            <div className="wb-bcards">
+                                                <div className="wb-bhead">书级</div>
+                                                <details className="wb-bcard">
+                                                    <summary>世界观</summary>
+                                                    {settings?.role_setting && <div className="wb-bcore">{settings.role_setting}</div>}
+                                                    {docOf('世界观') ? <pre className="wb-bpre">{docOf('世界观')}</pre> : <div className="wb-docempty">（暂无世界观文档）</div>}
+                                                </details>
+                                                <details className="wb-bcard">
+                                                    <summary>核心剧情</summary>
+                                                    {docOf('核心剧情') ? <pre className="wb-bpre">{docOf('核心剧情')}</pre> : <div className="wb-docempty">（暂无核心剧情文档）</div>}
+                                                </details>
+                                                <details className="wb-bcard">
+                                                    <summary>文风基调</summary>
+                                                    {settings?.style ? <pre className="wb-bpre">{settings.style}</pre> : <div className="wb-docempty">（未生成）</div>}
+                                                </details>
+                                            </div>
+                                        </>
+                                    )
+                                })()}
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 第三段：节奏概览（点击展开完整雷达） */}
+                    <div className={`wb-arbsec pacing ${paceExpand ? 'expanded' : ''}`}>
+                        <div className="wb-arbhead" style={{ cursor: 'pointer' }}
+                            onClick={() => setPaceExpand(!paceExpand)}>
+                            节奏概览
+                            <span className="cnt">{finChapters.length} 章 · {paceExpand ? '收起' : '展开'}</span>
+                        </div>
+                        {!paceExpand ? (
+                            <div className="wb-pacemini">
+                                <div className="pm-bars">
+                                    {Array.from({ length: Math.min(arcList.length, 20) }).map((_, i) => {
+                                        const a = arcList[i]
+                                        const chs = a?.chapters?.length || 0
+                                        const h = Math.max(8, Math.min(32, chs * 6 + 8))
+                                        const isCur = a?.id === activeArcId
+                                        const isDone = a?.status === 'done'
+                                        const cls = isDone ? 'done' : isCur ? 'cur' : ''
+                                        return <div key={i} className={`pm-bar ${cls}`} style={{ height: h + 'px' }} title={a?.name || ''} />
+                                    })}
+                                    {arcList.length === 0 && (
+                                        <div style={{ fontSize: 10, color: 'var(--ink-mute)', textAlign: 'center', width: '100%', padding: '8px 0' }}>暂无</div>
+                                    )}
+                                </div>
+                                <div className="pm-stats">
+                                    <span>字 <b>{(totalWords / 1000).toFixed(0)}k</b></span>
+                                    <span>均 <b>{overallAvg ? overallAvg.toFixed(2).replace(/^0/, '') : '—'}</b></span>
+                                    <span style={{ color: pollutedCount ? 'var(--cinnabar)' : 'var(--green)' }}>
+                                        污 <b>{pollutedCount}</b>
+                                    </span>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="wb-pacefull">
+                                {/* 展开版：完整节奏图（从 renderPacing 简化） */}
+                                <div className="pace-arc-list">
+                                    {arcList.map((a, i) => {
+                                        const chs = a.chapters || []
+                                        const sc = arcScores(a)
+                                        return (
+                                            <div key={a.id} className={`pace-arc-row ${a.id === activeArcId ? 'cur' : ''}`}>
+                                                <div className="pace-arc-name">{a.name}</div>
+                                                <div className="pace-arc-bars">
+                                                    {chs.length === 0 ? (
+                                                        <span className="pace-empty">未开始</span>
+                                                    ) : chs.map((c, ci) => (
+                                                        <div key={ci} className={`pace-ch-dot ${c.status || ''}`}
+                                                            title={`第${ci+1}章 ${c.title || ''}`} />
+                                                    ))}
+                                                </div>
+                                                {sc && <div className="pace-score">{sc.overall.toFixed(2).replace(/^0/, '')}</div>}
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* 地图大预览面板（fixed 定位，浮在所有内容之上） */}
+                    {mapViewId && (() => {
+                        const m = allElems.find(x => x.id === mapViewId)
+                        if (!m) return null
+                        const places = (m.fields || [])
+                            .filter(f => f.name && f.value)
+                            .map(f => ({ name: f.name, desc: String(f.value || '').slice(0, 30) }))
+                        const extraPlaces = places.length < 3 && m.desc
+                            ? m.desc.split(/[。，；\n]/).filter(s => s.length > 2 && s.length < 12).slice(0, 6).map(s => ({ name: s, desc: '' }))
+                            : []
+                        const allPlaces = [...places, ...extraPlaces].slice(0, 12)
+                        return (
+                            <div className="wb-mapview wb-mapview-fixed" onClick={e => e.stopPropagation()}>
+                                <div className="mv-head">
+                                    <span className="mv-title">{m.name}</span>
+                                    <span className="mv-close" onClick={() => setMapViewId(null)}>✕</span>
+                                </div>
+                                <div className="mv-canvas">
+                                    <svg viewBox="0 0 400 300" className="mv-svg" preserveAspectRatio="xMidYMid meet">
+                                        <rect width="400" height="300" fill="#f7f2e6" />
+                                        <path d="M0,120 Q40,80 80,110 T160,95 T240,105 T320,90 T400,100 L400,140 L0,140 Z"
+                                            fill="#d6d0c0" opacity="0.4" />
+                                        <path d="M0,140 Q60,100 120,130 T240,115 T360,125 T400,115 L400,160 L0,160 Z"
+                                            fill="#c8c0a8" opacity="0.3" />
+                                        <path d="M50,30 Q80,80 60,140 T90,220 T70,280"
+                                            stroke="#8ba4b0" strokeWidth="8" fill="none" opacity="0.5" strokeLinecap="round" />
+                                        <path d="M350,20 Q320,70 340,130 T310,210 T330,280"
+                                            stroke="#8ba4b0" strokeWidth="6" fill="none" opacity="0.4" strokeLinecap="round" />
+                                        <rect x="140" y="130" width="120" height="80" fill="#f0e6d0" stroke="#8b7355" strokeWidth="1.5" rx="2" />
+                                        <line x1="200" y1="130" x2="200" y2="210" stroke="#a89070" strokeWidth="0.5" strokeDasharray="3,3" />
+                                        <line x1="140" y1="170" x2="260" y2="170" stroke="#a89070" strokeWidth="0.5" strokeDasharray="3,3" />
+                                        <rect x="192" y="126" width="16" height="8" fill="#8b7355" rx="1" />
+                                        <rect x="192" y="206" width="16" height="8" fill="#8b7355" rx="1" />
+                                        {allPlaces.slice(0, 8).map((p, i) => {
+                                            const positions = [
+                                                [80, 60], [300, 50], [60, 200], [320, 180],
+                                                [180, 160], [230, 160], [150, 240], [280, 250]
+                                            ]
+                                            const [cx, cy] = positions[i] || [100 + i * 40, 150]
+                                            return (
+                                                <g key={i}>
+                                                    <circle cx={cx} cy={cy} r="4" fill="#b8432c" opacity="0.8" />
+                                                    <circle cx={cx} cy={cy} r="8" fill="none" stroke="#b8432c" strokeWidth="0.8" opacity="0.4" />
+                                                    <text x={cx + 8} y={cy + 3} fontSize="10" fill="#4a3c2a" fontFamily="serif" fontWeight="600">
+                                                        {p.name.slice(0, 6)}
+                                                    </text>
+                                                </g>
+                                            )
+                                        })}
+                                        <g transform="translate(365, 40)">
+                                            <circle r="14" fill="none" stroke="#7a6a4f" strokeWidth="0.8" />
+                                            <polygon points="0,-10 3,0 0,10 -3,0" fill="#b8432c" />
+                                            <text y="-16" textAnchor="middle" fontSize="9" fill="#7a6a4f" fontFamily="serif" fontWeight="700">北</text>
+                                        </g>
+                                        <g transform="translate(20, 275)">
+                                            <line x1="0" y1="0" x2="60" y2="0" stroke="#7a6a4f" strokeWidth="1" />
+                                            <line x1="0" y1="-3" x2="0" y2="3" stroke="#7a6a4f" strokeWidth="1" />
+                                            <line x1="30" y1="-2" x2="30" y2="2" stroke="#7a6a4f" strokeWidth="0.8" />
+                                            <line x1="60" y1="-3" x2="60" y2="3" stroke="#7a6a4f" strokeWidth="1" />
+                                            <text x="30" y="14" textAnchor="middle" fontSize="8" fill="#7a6a4f" fontFamily="serif">十里</text>
+                                        </g>
+                                    </svg>
+                                </div>
+                                {m.desc && <div className="mv-desc">{m.desc}</div>}
+                                {allPlaces.length > 0 && (
+                                    <div className="mv-places">
+                                        <div className="mv-pk">地点索引</div>
+                                        <div className="mv-plist">
+                                            {allPlaces.map((p, i) => (
+                                                <div key={i} className="mv-pitem">
+                                                    <span className="mv-pdot"></span>
+                                                    <span className="mv-pname">{p.name}</span>
+                                                    {p.desc && <span className="mv-pdesc">{p.desc}</span>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )
+                    })()}
+
+                </aside>
+    )
+
+    // 元素详情浮层（2026-09-07 提为两模式共用：fixed 定位挂 wb-body 层，书级画布也能弹；支持 isNew 新建表单）
+    const renderElemPop = () => {
+        const e = elemPopId ? allElems.find(x => x.id === elemPopId) : null
+        const isNew = !e && elemEdit?.isNew
+        if (!e && !isNew) return null
+        const kindMap = { characters: '角色', items: '物品', settings: '设定', locations: '地点', maps: '地图' }
+        const kind = e ? e.kind : elemEdit.kind
+        const aliasField = kind === 'settings' ? 'terms' : 'alias'
+        const editing = isNew || (elemEdit?.id === e.id)
+        return (
+            <div className="wb-epop" onClick={(ev) => ev.stopPropagation()}>
+                <div className="epop-head">
+                    <div className="epop-title">
+                        {editing ? (
+                            <input className="epop-inp" value={elemEdit.name || ''} onChange={ev => setElemEdit({ ...elemEdit, name: ev.target.value })}
+                                placeholder="元素名" style={{ width: 150, fontSize: 13, fontWeight: 600 }} />
+                        ) : (
+                            <div className="epop-name">{e.name}</div>
+                        )}
+                        <div className="epop-kind">{kindMap[kind] || kind}{e?.inArc && <span className="epop-in">· 本情节参与</span>}{isNew && <span className="epop-in">· 新建</span>}</div>
+                    </div>
+                    <span className="epop-close" onClick={() => { setElemPopId(null); setElemEdit(null) }}>✕</span>
+                </div>
+                <div className="epop-row">
+                    <span className="epop-k">{kind === 'settings' ? '术语' : '别名'}</span>
+                    {editing ? (
+                        <input className="epop-inp" value={elemEdit.alias || ''} onChange={ev => setElemEdit({ ...elemEdit, alias: ev.target.value })}
+                            placeholder="逗号分隔" style={{ flex: 1 }} />
+                    ) : (
+                        <span className="epop-v">{(e.kind === 'settings' ? e.terms : e.alias)?.join(' / ') || '—'}</span>
+                    )}
+                </div>
+                <div className="epop-row">
+                    <span className="epop-k">简述</span>
+                    {editing ? (
+                        <textarea className="epop-inp" value={elemEdit.desc || ''} onChange={ev => setElemEdit({ ...elemEdit, desc: ev.target.value })}
+                            rows={3} placeholder="身份与关键特质 / 用途 / 与剧情相关的关键设定"
+                            style={{ flex: 1, fontSize: 12.5, lineHeight: 1.6, fontFamily: 'inherit', resize: 'vertical' }} />
+                    ) : (
+                        <span className="epop-v">{e.desc ? (e.desc.slice(0, 200) + (e.desc.length > 200 ? '…' : '')) : '—'}</span>
+                    )}
+                </div>
+                {!isNew && e.fields?.length > 0 && (
+                    <div className="epop-fields">
+                        {e.fields.slice(0, 6).map((f, i) => (
+                            <div key={i} className="epop-field">
+                                <span className="ef-k">{f.name}</span>
+                                <span className="ef-v">{String(f.value || '').slice(0, 30)}</span>
+                            </div>
+                        ))}
+                    </div>
+                )}
+                {!isNew && e.relations?.length > 0 && (
+                    <div className="epop-row">
+                        <span className="epop-k">关系</span>
+                        <span className="epop-v">
+                            {e.relations.slice(0, 5).map((r, i) => {
+                                const target = allElems.find(x => x.id === r.to_id)
+                                const tname = target ? target.name.split('（')[0] : r.to_id
+                                return (
+                                    <span key={i} className="epop-rel">
+                                        {r.name} → {tname}
+                                    </span>
+                                )
+                            })}
+                        </span>
+                    </div>
+                )}
+                <div className="epop-actions" style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                    {!isNew && (
+                        <button style={btnStyle(busy, false)} disabled={busy}
+                            onClick={() => { const tagLine = (Array.isArray(e.alias) ? e.alias : []).join('、'); setElemPopId(null); setElemEdit(null); setDiscussTarget({ kind: 'element', elemId: e.id, name: `${kindMap[e.kind] || e.kind}·${e.name}`, content: `${e.desc || ''}${tagLine ? '\n别名：' + tagLine : ''}`.trim(), icon: e.emoji }) }}>
+                            发 AI 讨论
+                        </button>
+                    )}
+                    {editing ? (
+                        <>
+                            <button style={btnStyle(busy, true)} disabled={busy} onClick={saveElemEdit}>保存</button>
+                            {isNew ? (
+                                <button style={btnStyle(false, false)} onClick={() => setElemEdit(null)}>取消</button>
+                            ) : (
+                                <button style={{ ...btnStyle(busy, false), color: 'var(--cinnabar-d)' }} disabled={busy} onClick={deleteElem}>删除</button>
+                            )}
+                        </>
+                    ) : (
+                        <button style={btnStyle(busy, false)} disabled={busy}
+                            onClick={() => setElemEdit({ kind, id: e.id, name: e.name, alias: (Array.isArray(e[aliasField]) ? e[aliasField] : []).join('、'), desc: e.desc || '' })}>
+                            编辑
+                        </button>
+                    )}
+                </div>
+            </div>
+        )
+    }
+
     // 主布局：薄顶栏 + 创作(左侧栏+中间+右操作) + 系统 / 右侧创作助手常驻
     return (
         <div className="wb-app">
@@ -6107,8 +6101,12 @@ export default function AICreationPage() {
                         onClick={() => setTab('create')}>
                         创作
                     </button>
+                    <button type="button" className={`wb-mbtn wb-mb-xuan ${tab === 'adapt' ? 'active' : ''}`}
+                        onClick={() => setTab('adapt')}>
+                        改编
+                    </button>
                     <button type="button" className={`wb-mbtn wb-mb-xuan ${tab === 'system' ? 'active' : ''}`}
-                        onClick={() => setTab('system')}>
+                        onClick={() => { setTab('system'); setSyTab('overview') }}>
                         系统
                     </button>
                 </div>
@@ -6197,15 +6195,25 @@ export default function AICreationPage() {
                     </div>
                 ) : (
                     <>
-                        {/* 主舞台区 */}
-                        <div className="wb-stage" style={{ position: 'relative' }}>
-                            <div className={`wb-view ${tab === 'create' ? 'active' : ''}`}>
-                                {renderCreateHub()}
+                        {/* 主舞台区（书级讨论模式不渲染——全部书级内容在 wb-bookleft 左栏，两栏布局 2026-09-07） */}
+                        {!(tab === 'create' && bookLevelMode) && (
+                            <div className="wb-stage" style={{ position: 'relative' }}>
+                                <div className={`wb-view ${tab === 'create' ? 'active' : ''}`}>
+                                    {renderCreateHub()}
+                                </div>
+                                <div className={`wb-view ${tab === 'adapt' ? 'active' : ''}`}>
+                                    <AdaptPanel bookRoot={bookRoot} arcs={arcs} onAdvance={() => setTab('create')} />
+                                </div>
+                                <div className={`wb-view ${tab === 'system' ? 'active' : ''}`}>
+                                    {renderSystemHub()}
+                                </div>
                             </div>
-                            <div className={`wb-view ${tab === 'system' ? 'active' : ''}`}>
-                                {renderSystemHub()}
-                            </div>
-                        </div>
+                        )}
+
+                        {/* 左栏槽位：情节模式 arcbar / 书级模式 wb-bookleft（方案二：单页滚动+锚点） */}
+                        {tab === 'create' && !bookLevelMode && renderArcBar()}
+                        {tab === 'create' && bookLevelMode && renderBookLeft()}
+                        {tab === 'create' && renderElemPop()}
 
                         {/* 右侧创作助手（常驻，增强版） */}
                         <aside className="wb-aicol">
@@ -6215,21 +6223,21 @@ export default function AICreationPage() {
                                 <span className="ctx">
                                     {bookLevelMode ? '书级讨论' : (tab === 'create' ? (activeArc?.name || '未选情节') : '系统助手')}
                                 </span>
-                                {/* 书级/情节模式切换按钮 */}
-                                {tab === 'create' && (
+                                {/* 书级讨论入口（情节模式侧；书级模式侧的开关在左栏 bk-head 分段钮 2026-09-07） */}
+                                {tab === 'create' && !bookLevelMode && (
                                     <button
                                         type="button"
                                         className="btn btn-small"
                                         onClick={() => {
-                                            setBookLevelMode(!bookLevelMode)
-                                            // 切换到书级模式时清空消息，开始新对话
-                                            if (!bookLevelMode && messages.length === 0) {
+                                            setBookLevelMode(true)
+                                            // 切到书级模式时若还没有消息，发引导语开启书级对话
+                                            if (messages.length === 0) {
                                                 handleChat('我新开了一本书，请你帮我讨论全书的设定、人物、世界观和地图。')
                                             }
                                         }}
                                         style={{ marginLeft: 'auto', fontSize: 11, padding: '2px 8px' }}
                                     >
-                                        {bookLevelMode ? '切换到情节' : '书级讨论'}
+                                        书级讨论
                                     </button>
                                 )}
                             </div>
@@ -6577,15 +6585,20 @@ export default function AICreationPage() {
                                         </div>
                                     )}
                                     <div className="wb-pickstrip">
-                                        <span className="ps-t">点选对象（左栏元素/情节/阶梯）：</span>
-                                        {[
-                                            { n: '方嶂', k: 'element', v: '角色·方嶂', p: '夜巡司夜巡，前江湖刀客…' },
-                                            { n: '世界观', k: 'element', v: '设定·世界观', p: '大周盛世，扬州运河都会，妖事频发…' },
-                                            { n: '情节1', k: 'arc', v: '情节·情节1', p: '方嶂值夜捞尸遇断崖宗标记…' },
-                                            { n: 'l1', k: 'level', v: '阶梯·l1', p: '方嶂值夜捞尸，被迫与苏折枝联手…' },
-                                        ].map((x, i) => (
-                                            <span key={i} className="ps" onClick={() => setDiscussTarget({ kind: x.k, name: x.v, content: x.p, icon: x.n })}>{x.n}</span>
-                                        ))}
+                                        <span className="ps-t">点选对象：</span>
+                                        {(() => {
+                                            // 【2026-09-07】接真实数据（原硬编码演示值）：首个情节 + 首个角色 + 首个设定
+                                            const picks = []
+                                            const a0 = arcList[0]
+                                            if (a0) picks.push({ n: a0.name || '情节1', t: { kind: 'arc', arcId: a0.id, name: `情节「${a0.name || '情节1'}」`, content: a0.l1 || '', icon: '' } })
+                                            const c0 = (elements.characters || [])[0]
+                                            if (c0) picks.push({ n: c0.name, t: { kind: 'element', elemId: c0.id, name: `角色·${c0.name}`, content: c0.desc || '', icon: '' } })
+                                            const s0 = (elements.settings || [])[0]
+                                            if (s0) picks.push({ n: s0.name, t: { kind: 'element', elemId: s0.id, name: `设定·${s0.name}`, content: s0.desc || '', icon: '' } })
+                                            return picks.map((x, i) => (
+                                                <span key={i} className="ps" title={x.t.name} onClick={() => setDiscussTarget(x.t)}>{x.n}</span>
+                                            ))
+                                        })()}
                                     </div>
                                     {/* 插入工具栏（l4 层级显示） */}
                                     {tab === 'create' && ladderExpanded?.l4 && arcState?.levels?.l4?.scenes?.length > 0 && (
@@ -6601,7 +6614,10 @@ export default function AICreationPage() {
                                         placeholder={discuss ? `针对「${discuss.name}」说点什么…（会基于它回复/修改）` : '说点什么…（基于访问范围）'}
                                         pendingConfirm={pendingConfirm}
                                         onConfirm={handleConfirmPending}
-                                        onCancel={() => setPendingConfirm(null)} compact />
+                                        onCancel={() => setPendingConfirm(null)}
+                                        sessions={chatSessions} currentSessionId={chatSessionId}
+                                        onNewSession={newChatSession} onSelectSession={switchChatSession} onDeleteSession={deleteChatSession}
+                                        onDeleteMessage={deleteMessagePair} compact />
                                 </div>
                             )}
 
@@ -6620,7 +6636,10 @@ export default function AICreationPage() {
                                         placeholder="随便聊聊…（自由对话 · 全量+联网）"
                                         pendingConfirm={pendingConfirm}
                                         onConfirm={handleConfirmPending}
-                                        onCancel={() => setPendingConfirm(null)} compact />
+                                        onCancel={() => setPendingConfirm(null)}
+                                        sessions={chatSessions} currentSessionId={chatSessionId}
+                                        onNewSession={newChatSession} onSelectSession={switchChatSession} onDeleteSession={deleteChatSession}
+                                        onDeleteMessage={deleteMessagePair} compact />
                                 </div>
                             )}
 
@@ -6671,91 +6690,10 @@ export default function AICreationPage() {
                                 </div>
                             )}
 
-                            {/* 记忆面板（轻量，快捷动作切换；非独立模式） */}
+                            {/* 记忆面板（【Phase 3】D1 三级分层：全局/情节/单对话 + 未决冲突卡处置） */}
                             {memOpen && (
-                                <div className="wb-mempanel">
-                                    {/* 全书记忆 */}
-                                    <div className="wb-memsec">
-                                        <div className="wb-memsec-title">
-                                            全书记忆
-                                            <span className="cnt">{memList.filter(m => !m.scope || m.scope === 'book').length} 条</span>
-                                        </div>
-                                        {memLoading && memList.length === 0 ? (
-                                            <div style={{ fontSize: 11, color: 'var(--ink-mute)', textAlign: 'center', padding: 10 }}>加载中…</div>
-                                        ) : (
-                                            <>
-                                                {memList.filter(m => !m.scope || m.scope === 'book').map(m => (
-                                                    <div key={m.id} className="wb-memitem">
-                                                        <div className="mkey">{m.key || '（未命名）'}</div>
-                                                        <div className="mval">{m.text}</div>
-                                                        <div className="mtime">{(m.at || '').slice(5, 16).replace('T', ' ')}</div>
-                                                        <span className="mdel" onClick={async () => {
-                                                            if (window.confirm('删除这条记忆？')) {
-                                                                await phAiMemoryDelete(bookRoot, m.id)
-                                                                loadMemory()
-                                                            }
-                                                        }}>删除</span>
-                                                    </div>
-                                                ))}
-                                                <div className="wb-memadd" onClick={() => {
-                                                    const key = prompt('记忆标题（简短）')
-                                                    if (key === null) return
-                                                    const text = prompt('记忆内容')
-                                                    if (!text?.trim()) return
-                                                    phAiMemoryAdd({ book_root: bookRoot, text, key, scope: 'book' }).then(() => loadMemory())
-                                                }}>＋ 添加全书记忆</div>
-                                            </>
-                                        )}
-                                    </div>
-
-                                    {/* 本情节记忆 */}
-                                    <div className="wb-memsec">
-                                        <div className="wb-memsec-title">
-                                            本情节记忆
-                                            <span className="cnt">{memList.filter(m => m.scope === `arc:${activeArcId}`).length} 条</span>
-                                        </div>
-                                        {!activeArcId ? (
-                                            <div style={{ fontSize: 11, color: 'var(--ink-mute)', textAlign: 'center', padding: 10 }}>先选情节</div>
-                                        ) : memList.filter(m => m.scope === `arc:${activeArcId}`).length === 0 ? (
-                                            <div style={{ fontSize: 11, color: 'var(--ink-mute)', textAlign: 'center', padding: 10 }}>暂无本情节记忆</div>
-                                        ) : (
-                                            <>
-                                                {memList.filter(m => m.scope === `arc:${activeArcId}`).map(m => (
-                                                    <div key={m.id} className="wb-memitem">
-                                                        <div className="mkey">{m.key || '（未命名）'}</div>
-                                                        <div className="mval">{m.text}</div>
-                                                        <span className="mdel" onClick={async () => {
-                                                            if (window.confirm('删除这条记忆？')) {
-                                                                await phAiMemoryDelete(bookRoot, m.id)
-                                                                loadMemory()
-                                                            }
-                                                        }}>删除</span>
-                                                    </div>
-                                                ))}
-                                            </>
-                                        )}
-                                        {activeArcId && (
-                                            <div className="wb-memadd" onClick={() => {
-                                                const key = prompt('记忆标题（简短）')
-                                                if (key === null) return
-                                                const text = prompt('记忆内容')
-                                                if (!text?.trim()) return
-                                                phAiMemoryAdd({ book_root: bookRoot, text, key, scope: 'arc', arc_id: activeArcId }).then(() => loadMemory())
-                                            }}>＋ 添加本情节记忆</div>
-                                        )}
-                                    </div>
-
-                                    {/* 元素记忆 */}
-                                    <div className="wb-memsec">
-                                        <div className="wb-memsec-title">
-                                            元素记忆
-                                            <span className="cnt">灵感工坊同步</span>
-                                        </div>
-                                        <div style={{ fontSize: 11, color: 'var(--ink-mute)', textAlign: 'center', padding: 10 }}>
-                                            元素记忆在灵感工坊中维护
-                                        </div>
-                                    </div>
-                                </div>
+                                <MemoryPanel bookRoot={bookRoot} arcId={activeArcId || ''} sessionId={chatSessionId}
+                                    onChanged={loadMemory} />
                             )}
 
                             {/* 快捷操作（两种模式共享，默认折叠） */}
@@ -6790,6 +6728,8 @@ export default function AICreationPage() {
                     </>
                 )}
             </div>
+            {/* Electron 无 window.prompt：文本输入弹窗统一走 PromptModal */}
+            <PromptModal />
         </div>
     )
 }

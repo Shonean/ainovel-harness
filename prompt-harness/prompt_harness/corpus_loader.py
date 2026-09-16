@@ -441,7 +441,7 @@ def get_novel_files(genre: str, novel_name: str, corpus_dir: Path | None = None)
         corpus_dir: 语料目录
 
     Returns:
-        相对路径列表，如 ["玄幻武侠/示例书/第一章.txt", ...]
+        相对路径列表，如 ["玄幻武侠/青山/第一章.txt", ...]
     """
     corpus_dir = _resolve_corpus_dir(corpus_dir)
     novel_dir = (corpus_dir / genre / novel_name).resolve()

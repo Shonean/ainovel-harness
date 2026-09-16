@@ -72,8 +72,8 @@ class TestQueryEntity:
         state = {
             "entities_v3": {
                 "角色": {
-                    "linyue": {
-                        "name": "林越",
+                    "xiaoyan": {
+                        "name": "萧炎",
                         "tier": "核心",
                         "aliases": ["他"],
                         "realm": "斗帝",
@@ -83,15 +83,15 @@ class TestQueryEntity:
                 }
             },
             "state_changes": [
-                {"entity_id": "linyue", "field": "realm", "old": "斗圣", "new": "斗帝", "chapter": 100}
+                {"entity_id": "xiaoyan", "field": "realm", "old": "斗圣", "new": "斗帝", "chapter": 100}
             ],
         }
         (cfg.state_file).write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
         adapter = MemoryContractAdapter(cfg)
-        snap = adapter.query_entity("linyue")
+        snap = adapter.query_entity("xiaoyan")
         assert snap is not None
-        assert snap.name == "林越"
+        assert snap.name == "萧炎"
         assert snap.type == "角色"
         assert snap.tier == "核心"
         assert "他" in snap.aliases
@@ -160,7 +160,7 @@ class TestGetOpenLoops:
         store = ScratchpadManager(cfg)
         store.upsert_item(MemoryItem(
             id="ol-1", layer="semantic", category="open_loop",
-            subject="出师之约", field="", value="林越与纳兰嫣然出师之约",
+            subject="三年之约", field="", value="萧炎与纳兰嫣然三年之约",
             status="active", source_chapter=1,
             payload={"expected_payoff": "大比", "urgency": 0.9},
         ))
@@ -168,7 +168,7 @@ class TestGetOpenLoops:
         adapter = MemoryContractAdapter(cfg)
         loops = adapter.get_open_loops()
         assert len(loops) == 1
-        assert loops[0].content == "林越与纳兰嫣然出师之约"
+        assert loops[0].content == "萧炎与纳兰嫣然三年之约"
         assert loops[0].urgency == 0.9
 
 
@@ -210,14 +210,14 @@ class TestLoadContext:
         cfg = _make_project(tmp_path)
         state = {
             "progress": {"current_chapter": 9},
-            "protagonist_state": {"location": "测试学院", "power": {"realm": "测试境界"}},
+            "protagonist_state": {"location": "迦南学院", "power": {"realm": "斗师"}},
         }
         cfg.state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
         adapter = MemoryContractAdapter(cfg)
         pack = adapter.load_context(10)
         assert "protagonist" in pack.sections
-        assert pack.sections["protagonist"]["location"] == "测试学院"
+        assert pack.sections["protagonist"]["location"] == "迦南学院"
         assert "progress" in pack.sections
 
     def test_load_context_includes_recent_summaries(self, tmp_path):
@@ -246,7 +246,7 @@ class TestLoadContext:
         ))
         store.upsert_item(MemoryItem(
             id="ol-1", layer="semantic", category="open_loop",
-            subject="出师之约", field="", value="林越与纳兰嫣然出师之约",
+            subject="三年之约", field="", value="萧炎与纳兰嫣然三年之约",
             status="active", source_chapter=1,
         ))
 
@@ -344,7 +344,7 @@ class TestCommitChapter:
         cfg = _make_project(tmp_path)
         adapter = MemoryContractAdapter(cfg)
         result = adapter.commit_chapter(1, {
-            "entities_appeared": [{"id": "linyue", "type": "角色"}],
+            "entities_appeared": [{"id": "xiaoyan", "type": "角色"}],
             "entities_new": [],
             "state_changes": [],
             "relationships_new": [],

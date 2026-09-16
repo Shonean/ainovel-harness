@@ -32,9 +32,9 @@ def test_relationship_events_timeline_and_subgraph(temp_project):
     manager = IndexManager(temp_project)
     manager.upsert_entity(
         EntityMeta(
-            id="linyue",
+            id="xiaoyan",
             type="角色",
-            canonical_name="林越",
+            canonical_name="萧炎",
             tier="核心",
             current={},
             first_appearance=1,
@@ -44,9 +44,9 @@ def test_relationship_events_timeline_and_subgraph(temp_project):
     )
     manager.upsert_entity(
         EntityMeta(
-            id="laoyaoshi",
+            id="yaolao",
             type="角色",
-            canonical_name="药师",
+            canonical_name="药老",
             tier="重要",
             current={},
             first_appearance=1,
@@ -66,8 +66,8 @@ def test_relationship_events_timeline_and_subgraph(temp_project):
     )
     manager.upsert_relationship(
         RelationshipMeta(
-            from_entity="linyue",
-            to_entity="laoyaoshi",
+            from_entity="xiaoyan",
+            to_entity="yaolao",
             type="师徒",
             description="正式拜师",
             chapter=3,
@@ -75,7 +75,7 @@ def test_relationship_events_timeline_and_subgraph(temp_project):
     )
     manager.upsert_relationship(
         RelationshipMeta(
-            from_entity="laoyaoshi",
+            from_entity="yaolao",
             to_entity="lintian",
             type="敌对",
             description="理念冲突",
@@ -84,8 +84,8 @@ def test_relationship_events_timeline_and_subgraph(temp_project):
     )
     event_id = manager.record_relationship_event(
         RelationshipEventMeta(
-            from_entity="linyue",
-            to_entity="laoyaoshi",
+            from_entity="xiaoyan",
+            to_entity="yaolao",
             type="师徒",
             chapter=3,
             action="create",
@@ -99,7 +99,7 @@ def test_relationship_events_timeline_and_subgraph(temp_project):
     assert event_id > 0
     manager.record_relationship_event(
         RelationshipEventMeta(
-            from_entity="laoyaoshi",
+            from_entity="yaolao",
             to_entity="lintian",
             type="敌对",
             chapter=5,
@@ -112,16 +112,16 @@ def test_relationship_events_timeline_and_subgraph(temp_project):
         )
     )
 
-    events = manager.get_relationship_events("linyue", direction="both", limit=20)
+    events = manager.get_relationship_events("xiaoyan", direction="both", limit=20)
     assert events
-    timeline = manager.get_relationship_timeline("linyue", "laoyaoshi", limit=20)
+    timeline = manager.get_relationship_timeline("xiaoyan", "yaolao", limit=20)
     assert timeline
     assert timeline[0]["type"] == "师徒"
 
-    graph = manager.build_relationship_subgraph("linyue", depth=2, chapter=10, top_edges=10)
+    graph = manager.build_relationship_subgraph("xiaoyan", depth=2, chapter=10, top_edges=10)
     node_ids = {n["id"] for n in graph["nodes"]}
-    assert "linyue" in node_ids
-    assert "laoyaoshi" in node_ids
+    assert "xiaoyan" in node_ids
+    assert "yaolao" in node_ids
     assert "lintian" in node_ids
     assert graph["edges"]
     mermaid = manager.render_relationship_subgraph_mermaid(graph)

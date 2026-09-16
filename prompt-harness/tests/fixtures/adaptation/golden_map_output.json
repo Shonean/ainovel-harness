@@ -1,0 +1,243 @@
+{
+ "assets": {
+  "assets": [
+   {
+    "asset_id": "bg_459a68da",
+    "hash": null,
+    "kind": "background",
+    "prompt": "深夜的旧教室，课桌椅摆得整齐，黑板上残留半截没擦干净的粉笔字，窗外路灯的光斜切进来，照在陈守念趴着的那张课桌上。",
+    "provider_hint": "seedream",
+    "ref": null,
+    "status": "pending",
+    "used_by": []
+   },
+   {
+    "asset_id": "voice_inner_n001_001",
+    "hash": null,
+    "kind": "voice",
+    "prompt": "内心独白：他试着回忆醒来之前的任何画面，得到的只有一片空白，越用力去想，太阳穴越胀痛。（中性、压抑）",
+    "provider_hint": "kokoro|cloud",
+    "ref": "char_001",
+    "status": "pending",
+    "used_by": [
+     "n001"
+    ]
+   },
+   {
+    "asset_id": "voice_inner_n001_002",
+    "hash": null,
+    "kind": "voice",
+    "prompt": "内心独白：他意识到自己连一秒钟之前的记忆都是断裂的，这种感觉很具体：像伸手去拿一件东西，却发现那只手根本不存在。（中性、压抑）",
+    "provider_hint": "kokoro|cloud",
+    "ref": "char_001",
+    "status": "pending",
+    "used_by": [
+     "n001"
+    ]
+   },
+   {
+    "asset_id": "spr_char_001_default",
+    "hash": null,
+    "kind": "portrait",
+    "prompt": "角色立绘：陈守念（中性立绘，中式恐怖基调）",
+    "provider_hint": "seedream",
+    "ref": "char_001",
+    "status": "pending",
+    "used_by": [
+     "n001"
+    ]
+   }
+  ]
+ },
+ "characters": {
+  "characters": [
+   {
+    "aliases": [
+     "守念"
+    ],
+    "assets": {
+     "expressions": [
+      "default"
+     ],
+     "portrait": "spr_char_001_default"
+    },
+    "description": "主角，患有解离性遗忘症，在纸人教室中醒来，年龄:28岁；职业:未知",
+    "id": "char_001",
+    "name": "陈守念",
+    "presence": [
+     "n001"
+    ],
+    "role": "protagonist",
+    "source_element": "char_001",
+    "voice": {
+     "cloud": "voice_id_placeholder",
+     "kokoro": "zm_x"
+    }
+   }
+  ]
+ },
+ "conflicts": [
+  "陈守念试图回忆身份，与自己空白的记忆对抗：他先试图回想姓名，失败；再回想昨晚行踪，仍然失败；最后只能放弃回想，转而检查随身物品寻找线索。"
+ ],
+ "interaction": {
+  "entities": [
+   {
+    "id": "int_n001_1",
+    "kind": "inspect",
+    "label": "场景一 纸人教室中醒来",
+    "next": null,
+    "node": "n001",
+    "prompt": "血玉扳指套在左手拇指上，取不下来，内圈刻着一个“守”字。",
+    "result": {
+     "narration": "血玉扳指套在左手拇指上，取不下来，内圈刻着一个“守”字。",
+     "set": {}
+    }
+   }
+  ]
+ },
+ "llm_zones": {
+  "global": {
+   "forbidden": [
+    "触发硬事件",
+    "新增具名角色",
+    "修改节点结构"
+   ],
+   "rule": "先映射合法动词，映射失败才交给 LLM 演出"
+  },
+  "zones": []
+ },
+ "protagonist_char": "char_001",
+ "raw_dialogues": {
+  "n001": [
+   "陈守念对着空教室低声问道：“这是哪儿？”",
+   "他又问了一遍，声音卡在喉咙里：“我叫什么……我叫什么？”"
+  ]
+ },
+ "scene_nodes": [
+  "n001"
+ ],
+ "story": {
+  "nodes": [
+   {
+    "background": "bg_459a68da",
+    "id": "n001",
+    "interaction_refs": [
+     "int_n001_1"
+    ],
+    "lines": [
+     {
+      "kind": "narration",
+      "text": "深夜的旧教室，课桌椅摆得整齐，黑板上残留半截没擦干净的粉笔字，窗外路灯的光斜切进来，照在陈守念趴着的那张课桌上。"
+     },
+     {
+      "kind": "narration",
+      "text": "陈守念从课桌上撑起身子，后脑发麻，手一滑撞翻了桌角的空水杯，杯子滚到地上摔出一声脆响。"
+     },
+     {
+      "kind": "narration",
+      "text": "他下意识摸遍全身口袋，掏出的只有一张揉皱的纸巾和半截铅笔，什么能证明身份的东西都没有。"
+     },
+     {
+      "kind": "narration",
+      "text": "他站起来绕着教室走了一圈，逐张看课桌上刻的名字，没有一张桌上刻着能让他有反应的字。"
+     },
+     {
+      "kind": "narration",
+      "text": "他右手无意识地摩挲左手拇指上那枚血玉扳指，指腹触到内圈有个凹凸的刻痕。"
+     },
+     {
+      "kind": "narration",
+      "text": "教室里只剩他一个人的呼吸声。"
+     },
+     {
+      "kind": "narration",
+      "text": "他记不起任何事，姓名、来历、昨晚在哪里，全都像被人从脑子里剜掉了。"
+     },
+     {
+      "kind": "narration",
+      "text": "他扶着桌沿站稳，指节因为用力而发白。"
+     },
+     {
+      "kind": "narration",
+      "text": "那枚扳指贴着皮肤，凉得反常。"
+     },
+     {
+      "detail": true,
+      "kind": "narration",
+      "text": "血玉扳指套在左手拇指上，取不下来，内圈刻着一个“守”字。"
+     },
+     {
+      "detail": true,
+      "kind": "narration",
+      "text": "黑板角落残留着半截被人擦了一半的值日表，日期那一栏已经看不清。"
+     },
+     {
+      "detail": true,
+      "kind": "narration",
+      "text": "教室后墙的挂钟停在两点十七分，秒针不动。"
+     },
+     {
+      "kind": "inner",
+      "text": "他试着回忆醒来之前的任何画面，得到的只有一片空白，越用力去想，太阳穴越胀痛。"
+     },
+     {
+      "kind": "inner",
+      "text": "他意识到自己连一秒钟之前的记忆都是断裂的，这种感觉很具体：像伸手去拿一件东西，却发现那只手根本不存在。"
+     },
+     {
+      "expression": null,
+      "kind": "dialogue",
+      "speaker": null,
+      "text": "陈守念对着空教室低声问道：“这是哪儿？”"
+     },
+     {
+      "expression": null,
+      "kind": "dialogue",
+      "speaker": null,
+      "text": "他又问了一遍，声音卡在喉咙里：“我叫什么……我叫什么？”"
+     }
+    ],
+    "next": null,
+    "present": [
+     "char_001"
+    ],
+    "source": {
+     "arc_id": "arc_golden",
+     "chapter": 1,
+     "scene_index": 0
+    },
+    "title": "场景一 纸人教室中醒来",
+    "type": "scene"
+   }
+  ],
+  "start": "n001"
+ },
+ "warnings": [],
+ "world": {
+  "items": [
+   {
+    "description": "老道士赠予的神秘扳指，似乎与诅咒有关，材质:血玉；来源:老道士赠送",
+    "id": "item_001",
+    "name": "血玉扳指",
+    "source_element": "item_001"
+   }
+  ],
+  "locations": [
+   {
+    "description": "破旧的教室，每个位子上都坐着纸人，特征:破旧、阴暗、门被锁住",
+    "id": "loc_001",
+    "name": "纸人教室",
+    "source_element": "loc_001"
+   }
+  ],
+  "settings": [
+   {
+    "description": "一种精神疾病，患者会遗忘自己的身份和过去",
+    "id": "set_001",
+    "name": "解离性遗忘",
+    "source_element": "set_001"
+   }
+  ],
+  "terms": []
+ }
+}

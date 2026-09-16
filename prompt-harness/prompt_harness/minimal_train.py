@@ -85,7 +85,7 @@ def _output_dir() -> Path:
 def run_chapter_offset(run_file: str, run: dict[str, Any] | None = None) -> int:
     """从 run 文件名/源文件名解析该 run 覆盖的起始章号（默认 1）。
 
-    「示例书1-10章」→ 1；「示例书501-815章」→ 501。解析失败默认 1。
+    「青山1-10章」→ 1；「青山501-815章」→ 501。解析失败默认 1。
     """
     run = run or {}
     src = (run_file or "") + "|" + str(run.get("source_file") or "")

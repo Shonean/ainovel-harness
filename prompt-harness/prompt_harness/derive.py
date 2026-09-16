@@ -24,6 +24,7 @@ from typing import Any
 from .arc_classify import _label_embeddings, _label_pool, _load_registry, _parse_json_safe
 from .embed_client import cosine_similarity, get_embeddings
 from .llm_client import chat_json
+from .runtime_flags import is_fast as _runtime_is_fast
 
 # 6 类叶子在场景 dict 里的字段名（环境是单串，其余是 list）
 _LEAF_FIELDS: dict[str, str] = {
@@ -643,6 +644,11 @@ async def _expand_arc_scenes_llm(
     review_on = bool(getattr(_s, "derive_ai_flavor_review", True))
     threshold = float(getattr(_s, "derive_ai_flavor_threshold", 0.70))
     retry_cap = max(0, int(getattr(_s, "derive_ai_flavor_retry", 1)))
+    # 【T32 P4】量产 fast：关闭 l4 审计修正轮 + ai_flavor 修补轮（默认行为不变）
+    _fast = _runtime_is_fast()
+    if _fast:
+        retry_cap = 0
+    audit_attempts = 1 if _fast else 3
 
     chaps_in = [c for c in (arc.get("chapters") or []) if isinstance(c, dict)]
     if not chaps_in:
@@ -655,7 +661,8 @@ async def _expand_arc_scenes_llm(
         audit_tries = 0
         # 【完成审计 l4】场景分解后逐项自检：结构不全/叶子空/对白无引号 → 最多修正 2 轮
         # （共 3 次尝试 = blocked 三振），仍不过则如实保留，不假装通过。
-        for attempt in range(3):
+        # 【T32 P4】fast：只做 1 次（不修正）。
+        for attempt in range(audit_attempts):
             audit_tries = attempt
             try:
                 scenes = await _expand_chapter_scenes_llm(

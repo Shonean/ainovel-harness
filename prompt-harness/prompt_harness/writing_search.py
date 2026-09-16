@@ -329,6 +329,7 @@ async def _search_book(query: str, book_root: str | Path, top_k: int, intent: st
     except Exception:
         qv = None
     cos = [0.0] * len(chunks)
+    stale_vec = 0
     if qv is not None:
         import numpy as np
         qn = np.array(qv, dtype=np.float32)
@@ -337,9 +338,15 @@ async def _search_book(query: str, book_root: str | Path, top_k: int, intent: st
             v = c.get("vec")
             if not v:
                 continue
+            if len(v) != len(qv):
+                # 嵌入服务商升维等模型变更：旧向量作废，跳过评分并后台重建本书索引（自愈）
+                stale_vec += 1
+                continue
             vn = np.array(v, dtype=np.float32)
             vn = vn / (np.linalg.norm(vn) + 1e-9)
             cos[i] = float(np.dot(qn, vn))
+        if stale_vec:
+            _rebuild_book_index_bg(book_root)
     bmax = max(bm) if bm and max(bm) > 0 else 1.0
     kw = _INTENT_KIND_WEIGHT.get(intent, _INTENT_KIND_WEIGHT["general"])
     scored = []
@@ -503,6 +510,62 @@ async def build_corpus_index() -> dict[str, Any]:
     return {"status": "ok", "chunks": total, "embedded": embedded, "books": len(files), "rebuilt": changed_files}
 
 
+_book_rebuild_inflight: set[str] = set()
+
+
+def _rebuild_book_index_bg(book_root: str | Path) -> None:
+    """检测到旧模型向量（维度与当前嵌入模型不符）→ 后台整本重建索引（去重防风暴）。"""
+    key = str(book_root)
+    if key in _book_rebuild_inflight:
+        return
+    _book_rebuild_inflight.add(key)
+
+    async def _run() -> None:
+        try:
+            await build_book_index(book_root)
+        except Exception:
+            pass
+        finally:
+            _book_rebuild_inflight.discard(key)
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        _book_rebuild_inflight.discard(key)
+
+
+_corpus_rebuild_inflight = False
+
+
+def _rebuild_corpus_index_bg() -> None:
+    """语料索引向量维度过时 → 清库后台全量重建。
+
+    build_corpus_index 按 mtime 跳过未变更文件，对「模型换维度」这种无 mtime 变化
+    的失效必须先删库；重建期间 _search_corpus 退化为 BM25 路径，不阻塞检索。"""
+    global _corpus_rebuild_inflight
+    if _corpus_rebuild_inflight:
+        return
+    _corpus_rebuild_inflight = True
+
+    async def _run() -> None:
+        global _corpus_rebuild_inflight
+        try:
+            try:
+                _corpus_index_path().unlink()
+            except FileNotFoundError:
+                pass
+            await build_corpus_index()
+        except Exception:
+            pass
+        finally:
+            _corpus_rebuild_inflight = False
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        _corpus_rebuild_inflight = False
+
+
 def _now_iso() -> str:
     import datetime
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -531,6 +594,7 @@ async def _search_corpus_indexed(query: str, top_k: int) -> list[dict[str, Any]]
         return []
     bm = _bm25_scores(query, chunks)
     cos = [0.0] * len(chunks)
+    stale_vec = 0
     qv: list[float] | None = None
     try:
         from .embed_client import get_embedding
@@ -545,9 +609,15 @@ async def _search_corpus_indexed(query: str, top_k: int) -> list[dict[str, Any]]
             v = c.get("vec")
             if not v:
                 continue
+            if len(v) != len(qv):
+                # 旧模型向量作废，跳过评分并触发语料索引后台重建（自愈）
+                stale_vec += 1
+                continue
             vn = np.array(v, dtype=np.float32)
             vn = vn / (np.linalg.norm(vn) + 1e-9)
             cos[i] = float(np.dot(qn, vn))
+        if stale_vec:
+            _rebuild_corpus_index_bg()
     bmax = max(bm) if bm and max(bm) > 0 else 1.0
     scored = []
     for i, c in enumerate(chunks):
@@ -903,7 +973,7 @@ _SRC_LABEL = {"book": "本书", "corpus": "语料", "csv": "参考资料", "refm
 # 源说明（喂给查询理解 LLM，让它学会自主判别该查哪些源）
 _SRC_DESC = {
     "book": "本书内容（设定/元素/弧/阶梯/已写正文/前文锚点）",
-    "corpus": "参考语料库（书D打更人/示例书等参考小说的章节原文）",
+    "corpus": "参考语料库（大奉打更人/青山等参考小说的章节原文）",
     "csv": "参考资料表（桥段套路/爽点节奏/命名规则/场景写法等写作知识表）",
     "refmd": "参考文档 md（题材知识/力量体系/爽点设计/多章结构等设计文档）",
     "template": "情节模板库（合格模板：冲突/转折/悬念/道具的桥段组织范例）",

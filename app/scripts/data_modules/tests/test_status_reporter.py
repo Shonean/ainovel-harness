@@ -175,7 +175,7 @@ def test_relationship_graph_prefers_index_db_data():
 
         state = {
             "progress": {"current_chapter": 12, "total_words": 24000},
-            "protagonist_state": {"name": "林越"},
+            "protagonist_state": {"name": "萧炎"},
             "relationships": {"allies": [{"name": "旧盟友", "relation": "友好"}], "enemies": []},
         }
         _write_state(project_root, state)
@@ -183,9 +183,9 @@ def test_relationship_graph_prefers_index_db_data():
         idx = IndexManager(config)
         idx.upsert_entity(
             EntityMeta(
-                id="linyue",
+                id="xiaoyan",
                 type="角色",
-                canonical_name="林越",
+                canonical_name="萧炎",
                 tier="核心",
                 current={},
                 first_appearance=1,
@@ -195,9 +195,9 @@ def test_relationship_graph_prefers_index_db_data():
         )
         idx.upsert_entity(
             EntityMeta(
-                id="laoyaoshi",
+                id="yaolao",
                 type="角色",
-                canonical_name="药师",
+                canonical_name="药老",
                 tier="重要",
                 current={},
                 first_appearance=1,
@@ -206,8 +206,8 @@ def test_relationship_graph_prefers_index_db_data():
         )
         idx.upsert_relationship(
             RelationshipMeta(
-                from_entity="linyue",
-                to_entity="laoyaoshi",
+                from_entity="xiaoyan",
+                to_entity="yaolao",
                 type="师徒",
                 description="师徒关系",
                 chapter=10,
@@ -215,15 +215,15 @@ def test_relationship_graph_prefers_index_db_data():
         )
         idx.record_relationship_event(
             RelationshipEventMeta(
-                from_entity="linyue",
-                to_entity="laoyaoshi",
+                from_entity="xiaoyan",
+                to_entity="yaolao",
                 type="师徒",
                 chapter=10,
                 action="create",
                 polarity=1,
                 strength=0.9,
                 description="拜师",
-                evidence="林越拜药师为师",
+                evidence="萧炎拜药老为师",
             )
         )
 
@@ -231,5 +231,5 @@ def test_relationship_graph_prefers_index_db_data():
         assert reporter.load_state() is True
         graph = reporter.generate_relationship_graph()
         assert "mermaid" in graph
-        assert "药师" in graph
+        assert "药老" in graph
         assert "师徒" in graph

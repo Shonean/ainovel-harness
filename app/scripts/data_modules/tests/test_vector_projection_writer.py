@@ -136,35 +136,35 @@ def _bare_writer():
 def test_event_to_text_character_state_new_only():
     w = _bare_writer()
     text = w._event_to_text({"event_type": "character_state_changed", "chapter": 5,
-                             "subject": "林越", "payload": {"new": "暴怒"}})
-    assert "第5章" in text and "林越" in text and "暴怒" in text
+                             "subject": "萧炎", "payload": {"new": "暴怒"}})
+    assert "第5章" in text and "萧炎" in text and "暴怒" in text
 
 
 def test_event_to_text_character_state_description_only():
     w = _bare_writer()
     text = w._event_to_text({"event_type": "character_state_changed", "chapter": 5,
-                             "subject": "林越", "payload": {"description": "陷入回忆"}})
-    assert "陷入回忆" in text and "林越" in text
+                             "subject": "萧炎", "payload": {"description": "陷入回忆"}})
+    assert "陷入回忆" in text and "萧炎" in text
 
 
 def test_event_to_text_character_state_empty_returns_empty():
     w = _bare_writer()
     assert w._event_to_text({"event_type": "character_state_changed", "chapter": 5,
-                             "subject": "林越", "payload": {}}) == ""
+                             "subject": "萧炎", "payload": {}}) == ""
 
 
 def test_event_to_text_relationship_changed():
     w = _bare_writer()
     text = w._event_to_text({"event_type": "relationship_changed", "chapter": 6,
-                             "subject": "林越", "payload": {"to_entity": "药师",
+                             "subject": "萧炎", "payload": {"to_entity": "药老",
                                                             "relationship_type": "师徒"}})
-    assert "药师" in text and "师徒" in text
+    assert "药老" in text and "师徒" in text
 
 
 def test_event_to_text_relationship_changed_no_to_returns_empty():
     w = _bare_writer()
     assert w._event_to_text({"event_type": "relationship_changed", "chapter": 6,
-                             "subject": "林越", "payload": {}}) == ""
+                             "subject": "萧炎", "payload": {}}) == ""
 
 
 def test_event_to_text_world_rule_revealed_and_broken():
@@ -186,17 +186,17 @@ def test_event_to_text_world_rule_empty_returns_empty():
 def test_event_to_text_open_loop_created():
     w = _bare_writer()
     text = w._event_to_text({"event_type": "open_loop_created", "chapter": 8,
-                             "subject": "林越", "payload": {"description": "神秘戒指"}})
+                             "subject": "萧炎", "payload": {"description": "神秘戒指"}})
     assert "悬念" in text and "神秘戒指" in text
 
 
 def test_event_to_text_artifact_obtained_with_and_without_owner():
     w = _bare_writer()
     with_owner = w._event_to_text({"event_type": "artifact_obtained", "chapter": 9,
-                                   "subject": "", "payload": {"name": "玄重尺", "owner": "林越"}})
-    assert "林越" in with_owner and "玄重尺" in with_owner
+                                   "subject": "", "payload": {"name": "玄重尺", "owner": "萧炎"}})
+    assert "萧炎" in with_owner and "玄重尺" in with_owner
     no_owner = w._event_to_text({"event_type": "artifact_obtained", "chapter": 9,
-                                 "subject": "药师", "payload": {"name": "骨灵冷火"}})
+                                 "subject": "药老", "payload": {"name": "骨灵冷火"}})
     assert "获得" in no_owner and "骨灵冷火" in no_owner
 
 
@@ -210,8 +210,8 @@ def test_event_to_text_unknown_type_returns_empty():
 
 def test_delta_to_text_entity_id_path():
     w = _bare_writer()
-    text = w._delta_to_text({"entity_id": "E001", "canonical_name": "林越", "chapter": 3})
-    assert "实体变更" in text and "林越" in text
+    text = w._delta_to_text({"entity_id": "E001", "canonical_name": "萧炎", "chapter": 3})
+    assert "实体变更" in text and "萧炎" in text
 
 
 def test_delta_to_text_empty_returns_empty():
@@ -226,8 +226,8 @@ def test_collect_chunks_skips_non_dict_events_and_deltas():
     payload = {
         "meta": {"chapter": 1, "status": "accepted"},
         "accepted_events": ["not-a-dict", None, {"event_type": "power_breakthrough",
-                            "chapter": 1, "subject": "林越", "payload": {"new": "武者"}}],
-        "entity_deltas": [42, {"entity_id": "E1", "chapter": 1, "canonical_name": "药师"}],
+                            "chapter": 1, "subject": "萧炎", "payload": {"new": "斗者"}}],
+        "entity_deltas": [42, {"entity_id": "E1", "chapter": 1, "canonical_name": "药老"}],
     }
     chunks = w._collect_chunks(payload)
     assert len(chunks) == 2
@@ -240,7 +240,7 @@ def _accepted_payload_with_event():
     return {
         "meta": {"status": "accepted", "chapter": 1},
         "accepted_events": [{"event_type": "power_breakthrough", "chapter": 1,
-                             "subject": "林越", "payload": {"new": "武者"}}],
+                             "subject": "萧炎", "payload": {"new": "斗者"}}],
         "entity_deltas": [],
     }
 

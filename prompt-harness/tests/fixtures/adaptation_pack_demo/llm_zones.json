@@ -1,0 +1,17 @@
+{
+  "zones": [
+    {
+      "id": "zone_c001",
+      "node": "c001",
+      "allow": ["ask_paper_figure", "free_action"],
+      "persona_guard": "维持中式恐怖氛围；不得让纸人开口说出成句人话；不得提前泄露循环真相。",
+      "hard_events": ["paper_figures_turn"],
+      "fallback_map": { "拿": "int_cabinet", "看": "int_cabinet" },
+      "budget": { "max_turns": 6, "max_chars": 1200 }
+    }
+  ],
+  "global": {
+    "rule": "先映射合法动词，映射失败才交给 LLM 演出",
+    "forbidden": ["触发硬事件", "新增具名角色", "修改节点结构"]
+  }
+}

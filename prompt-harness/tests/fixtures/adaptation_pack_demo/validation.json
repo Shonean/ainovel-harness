@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "errors": [],
+  "warnings": [],
+  "stats": {
+    "nodes": 5,
+    "scenes": 2,
+    "choices": 1,
+    "endings": 2,
+    "lines": 8,
+    "assets": 8,
+    "llm_calls": 0,
+    "cost_est": 0.0
+  }
+}

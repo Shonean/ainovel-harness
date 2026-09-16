@@ -243,7 +243,7 @@ def test_store_cli_conflicts(tmp_path, monkeypatch, capsys):
 def test_store_cli_query(tmp_path, monkeypatch, capsys):
     cfg = _cfg(tmp_path)
     manager = ScratchpadManager(cfg)
-    manager.upsert_item(_make_item("c1", subject="hero", field="realm", value="武者"))
+    manager.upsert_item(_make_item("c1", subject="hero", field="realm", value="斗者"))
 
     monkeypatch.setattr(sys, "argv", [
         "store", "--project-root", str(tmp_path),
@@ -259,7 +259,7 @@ def test_store_cli_query(tmp_path, monkeypatch, capsys):
 def test_store_cli_update(tmp_path, monkeypatch, capsys):
     cfg = _cfg(tmp_path)
     payload = json.dumps({
-        "state_changes": [{"entity_id": "hero", "field": "realm", "old": "武者", "new": "武师"}],
+        "state_changes": [{"entity_id": "hero", "field": "realm", "old": "斗者", "new": "斗师"}],
     })
     monkeypatch.setattr(sys, "argv", [
         "store", "--project-root", str(tmp_path),

@@ -229,8 +229,8 @@ def test_commit_service_normalizes_accepted_events_before_projection(tmp_path):
             "accepted_events": [
                 {
                     "type": "mystery_introduction",
-                    "characters": ["linyue"],
-                    "payload": {"content": "林越发现石门背后的新疑点"},
+                    "characters": ["xiaoyan"],
+                    "payload": {"content": "萧炎发现石门背后的新疑点"},
                 }
             ],
         },
@@ -240,7 +240,7 @@ def test_commit_service_normalizes_accepted_events_before_projection(tmp_path):
     assert event["event_id"].startswith("evt-ch076-001-")
     assert event["chapter"] == 76
     assert event["event_type"] == "open_loop_created"
-    assert event["subject"] == "linyue"
+    assert event["subject"] == "xiaoyan"
 
 
 def test_apply_projections_normalizes_events_before_router_inspection(
@@ -264,8 +264,8 @@ def test_apply_projections_normalizes_events_before_router_inspection(
         "accepted_events": [
             {
                 "type": "scene_open",
-                "characters": ["linyue"],
-                "payload": {"content": "林越推开石门，新的悬念出现"},
+                "characters": ["xiaoyan"],
+                "payload": {"content": "萧炎推开石门，新的悬念出现"},
             }
         ],
         "entity_deltas": [],
@@ -285,7 +285,7 @@ def test_apply_projections_normalizes_events_before_router_inspection(
     assert event["event_id"].startswith("evt-ch076-001-")
     assert event["chapter"] == 76
     assert event["event_type"] == "open_loop_created"
-    assert event["subject"] == "linyue"
+    assert event["subject"] == "xiaoyan"
     assert payload["accepted_events"] == captured["events"]
 
 

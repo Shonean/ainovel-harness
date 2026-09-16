@@ -989,7 +989,7 @@ async def corpus_upload(
 
     Query params:
         genre: 类型目录名（如"玄幻武侠"），必填（系统已预建两个类型目录）
-        novel: 小说目录名（如"示例书"），可选
+        novel: 小说目录名（如"青山"），可选
 
     文件大小上限：50MB
     """
@@ -1312,7 +1312,7 @@ async def _do_train_frontier(
 
 
 def _novel_from_source_file(src: str) -> str:
-    """从 run.source_file 提取小说名：「示例书1-10章」→「示例书」。"""
+    """从 run.source_file 提取小说名：「青山1-10章」→「青山」。"""
     import re as _re
     s = (src or "").strip()
     s = _re.sub(r"[0-9][0-9\s]*[-~至][0-9\s]*章(\.txt)?$", "", s)
@@ -1979,12 +1979,14 @@ class AiArcChatRequest(AiArcIdRequest):
     access: dict[str, Any] | None = Field(None, description="访问控制 {book,memory,corpus,web}：控制注入多少上下文（缺省全开，web 由 web_search 决定）")
     sel_access: dict[str, Any] | None = Field(None, description="条目级选择性注入 {settings,arcs,elements,memory,corpus,templates}：只把选中的条目给助手看（在 access 允许范围内收窄）")
     mode: str = Field("normal", description="normal / init（初始化模式：裁剪 l2-l5 工具，换初始化引导 sys_p）")
+    session_id: str = Field("", description="会话 id（单对话层工作记忆按此隔离；remember scope=session 时必填）")
 
 
 class AiInitAssistantRequest(AiCreationBookRequest):
     """初始化创作助手对话请求（新建书时填充所有初始化内容）。"""
     messages: list[dict[str, Any]] = Field(default_factory=list)
     web_search: bool = Field(False)
+    session_id: str = Field("", description="会话 id（单对话层工作记忆）")
 
 
 class AiSearchRequest(AiCreationBookRequest):
@@ -2132,6 +2134,136 @@ async def _do_ai_creation_init(
     except Exception as e:  # noqa: BLE001
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = str(e)[:300]
+
+
+class AiQuickInitRequest(AiCreationBookRequest):
+    """量产快速初始化表单（书名必填，其余可选）。"""
+    title: str = Field(..., min_length=1, description="书名")
+    genre: str = Field("", description="题材（如 中式恐怖 / 悬疑）")
+    protagonist: str = Field("", description="主角名")
+    style: str = Field("", description="文风（可选，LLM 会补全）")
+    one_liner: str = Field("", description="一句话简介")
+    target_chapters: int = Field(0, ge=0, le=500, description="预计章数（回显，供路线图）")
+
+
+@router.post("/ai-creation/init/quick")
+async def ai_creation_init_quick(req: AiQuickInitRequest) -> dict[str, str]:
+    """量产快速初始化：表单 → 基本设定 + 元素卡（待审，不自动批准）+ 设定集。
+
+    进度/结果走 /optimize/status/{task_id}（type=ai_creation_init_quick）；
+    结果 result 内含 cards/counts，卡片同时进 /ai-creation/pending。
+    """
+    task_id = start_task("ai_creation_init_quick", progress={
+        "messages": ["正在生成元素卡…"],
+        "mode": load_book_mode(req.book_root),
+    })
+    _safe_start_task(task_id, _do_ai_creation_init_quick(task_id, req))
+    return {"task_id": task_id}
+
+
+async def _do_ai_creation_init_quick(task_id: str, req: AiQuickInitRequest) -> None:
+    from . import ai_creation as ac
+    try:
+        tasks[task_id]["progress"]["messages"].append("正在生成设定集文档…")
+        r = await ac.quick_init(
+            req.book_root, title=req.title, genre=req.genre,
+            protagonist=req.protagonist, style=req.style,
+            one_liner=req.one_liner, target_chapters=req.target_chapters)
+        tasks[task_id]["result"] = r
+        tasks[task_id]["status"] = "done" if r.get("ok") else "failed"
+        if not r.get("ok"):
+            tasks[task_id]["error"] = r.get("error")
+        else:
+            c = r.get("counts") or {}
+            tasks[task_id]["progress"]["messages"].append(
+                f"已生成 {c.get('characters', 0)} 角色 / {c.get('items', 0)} 物品 / "
+                f"{c.get('settings', 0)} 设定，卡片待确认")
+    except Exception as e:  # noqa: BLE001
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["error"] = str(e)[:300]
+
+
+# ── 量产路线图（roadmap：幕/弧卡/伏笔台账/冻结）──────────────
+
+class AiRoadmapGenerateRequest(AiCreationBookRequest):
+    target_chapters: int = Field(30, ge=1, le=500, description="目标总章数")
+    n_chapters_per_arc: int = Field(3, ge=1, le=20, description="每情节章数")
+    brief: str = Field("", description="作者补充要求（可选）")
+
+
+class AiRoadmapSaveRequest(AiCreationBookRequest):
+    roadmap: dict[str, Any] = Field(default_factory=dict, description="编辑后的路线图全文")
+
+
+class AiRoadmapFreezeRequest(AiCreationBookRequest):
+    force: bool = Field(False, description="跳过校验错误强制冻结（谨慎）")
+
+
+class AiRoadmapArcRequest(AiCreationBookRequest):
+    arc_id: str = Field(..., min_length=1, description="弧卡 id（如 a3）")
+    instruction: str = Field("", description="重生成要求（可选）")
+
+
+class AiRoadmapContinueRequest(AiCreationBookRequest):
+    count: int = Field(1, ge=1, le=10, description="追加弧卡数量")
+
+
+@router.post("/ai-creation/roadmap/generate")
+async def ai_creation_roadmap_generate(req: AiRoadmapGenerateRequest) -> dict[str, Any]:
+    """LLM 生成全书路线图草案（幕+弧卡+伏笔台账），覆盖旧草案。"""
+    from . import roadmap as rmap
+    return await rmap.generate_roadmap(
+        req.book_root, target_chapters=req.target_chapters,
+        n_chapters_per_arc=req.n_chapters_per_arc, brief=req.brief)
+
+
+@router.get("/ai-creation/roadmap")
+async def ai_creation_roadmap_get(book_root: str) -> dict[str, Any]:
+    """读取路线图 + 校验结果（无路线图时 roadmap=null）。"""
+    from . import ai_creation as ac
+    from . import roadmap as rmap
+    data = rmap.load_roadmap(book_root)
+    return {
+        "roadmap": data,
+        "validation": rmap.validate_roadmap(data, ac.load_elements(book_root)) if data else None,
+    }
+
+
+@router.put("/ai-creation/roadmap")
+async def ai_creation_roadmap_put(req: AiRoadmapSaveRequest) -> dict[str, Any]:
+    """保存编辑后的路线图（回到草案状态，冻结需重新走 /freeze）。"""
+    from . import ai_creation as ac
+    from . import roadmap as rmap
+    r = dict(req.roadmap or {})
+    if not (r.get("arcs") or []):
+        return {"ok": False, "error": "弧卡为空，拒绝保存"}
+    r.setdefault("schema_version", 1)
+    r["status"] = "draft"
+    r.pop("frozen_at", None)
+    rmap.save_roadmap(req.book_root, r)
+    return {"ok": True, "roadmap": r,
+            "validation": rmap.validate_roadmap(r, ac.load_elements(req.book_root))}
+
+
+@router.post("/ai-creation/roadmap/freeze")
+async def ai_creation_roadmap_freeze(req: AiRoadmapFreezeRequest) -> dict[str, Any]:
+    """冻结路线图：校验拦截悬空伏笔/幕覆盖等错误；force 可跳过。"""
+    from . import roadmap as rmap
+    return rmap.freeze_roadmap(req.book_root, force=req.force)
+
+
+@router.post("/ai-creation/roadmap/card/regenerate")
+async def ai_creation_roadmap_card_regenerate(req: AiRoadmapArcRequest) -> dict[str, Any]:
+    """单卡重生成（保留 id/序号/幕归属）。"""
+    from . import roadmap as rmap
+    return await rmap.regenerate_arc(req.book_root, req.arc_id, instruction=req.instruction)
+
+
+@router.post("/ai-creation/roadmap/continue")
+async def ai_creation_roadmap_continue(req: AiRoadmapContinueRequest) -> dict[str, Any]:
+    """续写弧卡：尾部追加 count 个情节弧（追加到最后一幕）。"""
+    from . import roadmap as rmap
+    return await rmap.continue_arcs(req.book_root, count=req.count)
 
 
 @router.get("/ai-creation/settings")
@@ -2391,6 +2523,14 @@ async def ai_creation_chat_sessions_save(req: ChatSessionsSaveRequest) -> dict[s
     return {"ok": True}
 
 
+@router.delete("/ai-creation/chat-sessions/{session_id}")
+async def ai_creation_chat_sessions_delete(session_id: str, book_root: str) -> dict[str, Any]:
+    """【Phase 3】删除一整段会话（含其全部消息）。"""
+    from . import ai_creation as ac
+    ok = ac.delete_chat_session(book_root, session_id)
+    return {"ok": ok}
+
+
 class ExtractCardsRequest(AiCreationBookRequest):
     text: str = Field(..., min_length=1, description="要提取内容的对话文本")
 
@@ -2434,6 +2574,53 @@ async def ai_creation_memory_put(mid: str, req: AiMemoryRequest) -> dict[str, An
 async def ai_creation_memory_delete(mid: str, book_root: str) -> dict[str, Any]:
     from . import ai_creation as ac
     ok = ac.delete_memory(book_root, mid)
+    return {"ok": ok}
+
+
+# ── 【Phase 2】D1 三级记忆：面板数据 / 冲突卡处置 / 单对话工作记忆 ──
+@router.get("/ai-creation/memory/tiers")
+async def ai_creation_memory_tiers(book_root: str, arc_id: str = "", session_id: str = "") -> dict[str, Any]:
+    """三级记忆面板数据：{global[], arc[], session[], cards[], stats}。"""
+    from . import ai_creation as ac
+    return ac.memory_tiers(book_root, arc_id=arc_id, session_id=session_id)
+
+
+class AiMemoryCardResolveRequest(AiCreationBookRequest):
+    card_id: str = Field(..., min_length=1)
+    action: str = Field(..., min_length=1, description="coexist_layered / version_rewrite / revert / add_slot")
+    note: str = Field("", description="处置备注（分层并存的分层说明 / add_slot 的槽名）")
+    slot: str = Field("", description="add_slot 的槽标签（缺省用 note）")
+
+
+@router.post("/ai-creation/memory/card/resolve")
+async def ai_creation_memory_card_resolve(req: AiMemoryCardResolveRequest) -> dict[str, Any]:
+    """处置未决冲突卡：状态机 open → consolidating → resolved。"""
+    from . import ai_creation as ac
+    card = ac._bm(req.book_root).resolve_card(
+        req.card_id, req.action, note=req.note, decided_by="user", slot=req.slot)
+    if card is None:
+        raise HTTPException(status_code=404, detail=f"冲突卡不存在：{req.card_id}")
+    return {"ok": True, "card": card}
+
+
+class AiMemoryWorkingRequest(AiCreationBookRequest):
+    session_id: str = Field(..., min_length=1)
+    text: str = Field(..., min_length=1)
+
+
+@router.post("/ai-creation/memory/session")
+async def ai_creation_memory_working_add(req: AiMemoryWorkingRequest) -> dict[str, Any]:
+    """单对话层：手动写一条本会话约束卡。"""
+    from . import ai_creation as ac
+    card = ac.add_working_memory(req.book_root, req.session_id, req.text)
+    return {"ok": True, "card": card}
+
+
+@router.delete("/ai-creation/memory/session/{session_id}")
+async def ai_creation_memory_working_delete(session_id: str, book_root: str, key: str) -> dict[str, Any]:
+    """单对话层：删一条会话约束卡（key = 卡 id 或文本前缀）。"""
+    from . import ai_creation as ac
+    ok = ac.delete_working_memory(book_root, session_id, key)
     return {"ok": ok}
 
 
@@ -2631,9 +2818,53 @@ async def ai_creation_arc_modify(req: AiArcModifyRequest) -> dict[str, Any]:
 async def ai_creation_arc_chat(req: AiArcChatRequest) -> dict[str, Any]:
     from . import ai_creation as ac
     try:
-        return await ac.arc_chat(req.book_root, req.arc_id, req.messages, web_search=req.web_search, access=req.access, sel_access=req.sel_access, mode=req.mode)
+        return await ac.arc_chat(req.book_root, req.arc_id, req.messages, web_search=req.web_search, access=req.access, sel_access=req.sel_access, mode=req.mode, session_id=req.session_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.post("/ai-creation/arc/chat/stream")
+async def ai_creation_arc_chat_stream(req: AiArcChatRequest):
+    """【Phase 4】SSE 流式对话：转发 arc_chat 的 token / tool_call / pending_proposal，
+    结束推 done（result 与 REST /ai-creation/arc/chat 返回完全一致）。
+
+    事件格式：`data: {"type": "token", "text": "…"}\\n\\n`（每事件一行 data，JSON 编码）。
+    响应头发出后无法改 HTTP 状态码，异常以 {"type": "error"} 事件告知，前端自动落回 REST。
+    断连时后台任务继续跑完（工具半途状态不可弃），只是事件无人消费。
+    """
+    from fastapi.responses import StreamingResponse
+    from . import ai_creation as ac
+
+    async def _gen():
+        q: asyncio.Queue = asyncio.Queue()
+
+        async def on_event(etype: str, data: dict[str, Any]) -> None:
+            await q.put({"type": etype, **data})
+
+        async def _run():
+            try:
+                result = await ac.arc_chat(
+                    req.book_root, req.arc_id, req.messages,
+                    web_search=req.web_search, access=req.access, sel_access=req.sel_access,
+                    mode=req.mode, session_id=req.session_id, on_event=on_event)
+                await q.put({"type": "done", "result": result})
+            except Exception as exc:  # noqa: BLE001 —— 流内异常以事件告知
+                try:
+                    await q.put({"type": "error", "error": f"{type(exc).__name__}: {exc}"})
+                except Exception:  # noqa: BLE001
+                    pass
+            finally:
+                await q.put(None)  # 哨兵：收束生成器
+
+        asyncio.create_task(_run())
+        while True:
+            item = await q.get()
+            if item is None:
+                break
+            yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.post("/ai-creation/init/assistant")
@@ -2646,7 +2877,8 @@ async def ai_creation_init_assistant(req: AiInitAssistantRequest) -> dict[str, A
     from . import ai_creation as ac
     try:
         return await ac.arc_chat(
-            req.book_root, "", req.messages, web_search=req.web_search, mode="init")
+            req.book_root, "", req.messages, web_search=req.web_search, mode="init",
+            session_id=req.session_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
@@ -2672,6 +2904,7 @@ class AiArcChatApplyRequest(AiCreationBookRequest):
     tool: str = Field(..., min_length=1)
     args: dict[str, Any] = Field(default_factory=dict)
     mode: str = Field("normal", description="normal / init（初始化模式）")
+    session_id: str = Field("", description="会话 id（单对话层工作记忆）")
 
 
 @router.post("/ai-creation/arc/chat/apply")
@@ -2682,7 +2915,7 @@ async def ai_creation_arc_chat_apply(req: AiArcChatApplyRequest) -> dict[str, An
     arcs = ac.load_arcs(req.book_root)
     arc = ac._find_arc(arcs, req.arc_id) if req.arc_id else None
     elements = ac.load_elements(req.book_root)
-    ev, _ = await ac._execute_chat_tool(req.tool, req.args or {}, Path(req.book_root), arc, elements, dry_run=False, mode=req.mode)
+    ev, _ = await ac._execute_chat_tool(req.tool, req.args or {}, Path(req.book_root), arc, elements, dry_run=False, mode=req.mode, session_id=req.session_id)
     return {"ok": True, "event": ev, "arc_id": req.arc_id}
 
 
@@ -2967,12 +3200,53 @@ async def ai_fragment_finalize(req: AiFragmentFinalizeRequest) -> dict[str, Any]
         raise HTTPException(status_code=422, detail=str(exc))
 
 
+def load_book_mode(book_root: str | Path) -> str:
+    """只读书级模式：<book>/.ainovel/state.json 的 book_mode。
+
+    缺失/非法/读取失败一律回退 "premium"（存量书向后兼容）。
+    """
+    try:
+        sp = Path(book_root) / ".ainovel" / "state.json"
+        data = json.loads(sp.read_text(encoding="utf-8"))
+        mode = (data or {}).get("book_mode")
+        return mode if mode in ("premium", "mass") else "premium"
+    except Exception:
+        return "premium"
+
+
+def _write_mass_report(book_root: str | Path, run_id: str, stats: dict[str, Any]) -> None:
+    """【T32 P5】量产报告模板：落 <书>/审查报告/量产报告-<run_id>.md（best-effort）。"""
+    try:
+        root = Path(book_root) / "审查报告"
+        root.mkdir(parents=True, exist_ok=True)
+        usage = stats.get("usage") or {}
+        fails = stats.get("failures") or []
+        lines = [
+            f"# 量产报告 · {run_id}", "",
+            f"- 模式：{stats.get('mode')}",
+            f"- 章节：{stats.get('chapters')}/{stats.get('target')}",
+            f"- 耗时：{stats.get('elapsed_s')} 秒",
+            f"- LLM 调用：{usage.get('calls', 0)} 次 / {usage.get('total_tokens', 0)} tokens / "
+            f"约 ${float(usage.get('cost_usd') or 0):.4f}",
+            "",
+            f"## 失败清单（{len(fails)}）", "",
+        ]
+        lines += [f"- 第{f.get('idx')}章（{f.get('arc')}）：{f.get('error')}" for f in fails] or ["- 无"]
+        lines += ["", "## 补评", "",
+                  "量产期评分已跳过（score_deferred=true）；切回精品后在工作台「设置」页一键补评。"]
+        (root / f"量产报告-{run_id}.md").write_text("\n".join(lines), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class AiBatchGenerateRequest(AiCreationBookRequest):
     target_chapters: int = Field(10, ge=1, le=500, description="目标总章数")
     n_chapters_per_arc: int = Field(3, ge=1, le=20, description="每情节章数")
     arc_briefs: list[str] | None = Field(None, description="逐情节一句话极简剧情（缺省自动生成）")
     select_all_elements: bool = Field(True, description="批量模式每情节默认全选元素（隔离不拒）")
     resume_run_id: str | None = Field(None, description="续跑：复用上次中断的 run_id（已落盘章节自动跳过）")
+    mode_override: str | None = Field(None, description="仅测试用：覆盖书级模式（premium|mass）")
+    model: str | None = Field(None, description="运行级文本模型覆盖（量产 fast 可选便宜模型）")
 
 
 @router.post("/ai-creation/batch-generate")
@@ -2992,25 +3266,33 @@ async def ai_creation_batch_generate(req: AiBatchGenerateRequest) -> dict[str, s
             raise HTTPException(
                 status_code=400,
                 detail=f"run 已结束（{meta.get('last_event')}），无需续跑")
+    mode = req.mode_override if req.mode_override in ("premium", "mass") else load_book_mode(req.book_root)
     task_id = start_task("ai_creation_batch_generate", progress={
         "messages": ["正在初始化批量生成…"],
         "total": 0, "target": req.target_chapters,
         "done": 0, "arc_index": 0, "arc_name": "", "step": "", "last_chapter": 0,
+        "mode": mode,
         **({"resume_run_id": req.resume_run_id} if req.resume_run_id else {})})
     if req.resume_run_id:
         tasks[task_id]["run_id"] = req.resume_run_id
     _safe_start_task(task_id, _do_ai_creation_batch_generate(
         task_id, req.book_root, req.target_chapters,
-        req.n_chapters_per_arc, req.arc_briefs, req.select_all_elements))
+        req.n_chapters_per_arc, req.arc_briefs, req.select_all_elements, mode, req.model))
     return {"task_id": task_id}
 
 
 async def _do_ai_creation_batch_generate(
     task_id: str, book_root: str, target_chapters: int,
     n_chapters_per_arc: int, arc_briefs: list[str] | None,
-    select_all_elements: bool,
+    select_all_elements: bool, mode: str = "premium",
+    model_override: str | None = None,
 ) -> None:
-    """批量逐弧驱动：复用 ai_creation 内部函数，串行跑到目标章数。"""
+    """批量逐弧驱动：复用 ai_creation 内部函数，串行跑到目标章数。
+
+    mass（量产 fast）：冻结路线图弧卡队列驱动 + l2 方向注入 + 跳过评分
+    （score_deferred）+ 质量管线降级 + 单章失败重试一轮 + 运行级模型覆盖 + 用量统计；
+    premium：保持原行为（briefs/auto 弧来源、全量评分、默认模型）。
+    """
     from . import ai_creation as ac
     from . import rollout
     from .workbench_logger import set_workbench_ctx, new_run_id
@@ -3028,12 +3310,32 @@ async def _do_ai_creation_batch_generate(
         data={"target_chapters": target_chapters,
               "n_chapters_per_arc": n_chapters_per_arc,
               "select_all_elements": select_all_elements,
+              "mode": mode,
+              "model_override": model_override or "",
               "arc_briefs": arc_briefs or []})
+
+    # 【T32 P4】运行上下文：fast 档（mass）+ 模型覆盖 + LLM 用量计入本 run
+    import time as _time
+    from . import runtime_flags
+    from .llm_client import set_llm_run_id, get_run_usage
+    runtime_flags.set_fast(mode == "mass")
+    runtime_flags.set_model(model_override)
+    set_llm_run_id(run_id)
+    _t_start = _time.time()
+    failures: list[dict[str, Any]] = []
+    _stats = {"base": 0}
 
     def _progress(**kw):
         p = tasks[task_id]["progress"]
         p.update(kw)
         p["messages"] = p.get("messages") or []
+        p["failures"] = failures
+        elapsed = round(_time.time() - _t_start, 1)
+        p["elapsed_s"] = elapsed
+        _done = int(p.get("done") or 0)
+        if _done > _stats["base"] and elapsed > 1:
+            rate = (_done - _stats["base"]) / elapsed
+            p["eta_s"] = int(max(0, target_chapters - _done) / max(rate, 1e-6))
         if kw.get("step"):
             p["messages"].append(f"[{p.get('done', 0)}/{target_chapters}] {kw['step']}")
             # rollout 事件（每步追加，失败静默）
@@ -3045,7 +3347,32 @@ async def _do_ai_creation_batch_generate(
         elements = ac.load_elements(book_root)
         arcs = ac.load_arcs(book_root)
         existing = len([1 for a in arcs.get("arcs", []) for _ in a.get("chapters", [])])
+        _stats["base"] = existing
         _progress(total=existing, done=existing)
+
+        # 【T32 P4】量产：冻结路线图弧卡队列；续跑先补完未完成弧，再取新卡
+        roadmap_cards: list[dict[str, Any]] = []
+        unfinished: list[dict[str, Any]] = []
+        rm_i = 0
+        if mode == "mass":
+            try:
+                from . import roadmap as rmap
+                _rm = rmap.load_roadmap(book_root)
+                if _rm and _rm.get("status") == "frozen":
+                    roadmap_cards = list(_rm.get("arcs") or [])
+            except Exception:  # noqa: BLE001
+                roadmap_cards = []
+            for _a in arcs.get("arcs", []):
+                try:
+                    rm_i = max(rm_i, int(_a.get("roadmap_index") or 0))
+                except (TypeError, ValueError):
+                    pass
+                if _a.get("roadmap_index") and len(_a.get("finalized") or {}) < n_chapters_per_arc:
+                    unfinished.append(_a)
+            unfinished.sort(key=lambda a: int(a.get("roadmap_index") or 0))
+            if roadmap_cards or unfinished:
+                _progress(step=(f"路线图队列已加载：{len(roadmap_cards)} 弧"
+                                f"（从第 {rm_i + 1} 弧继续；待补完 {len(unfinished)} 弧）"))
 
         # 全选元素列表（按 kind 去重取 id）
         all_selected: dict[str, list[str]] = {"characters": [], "items": [], "settings": []}
@@ -3057,117 +3384,182 @@ async def _do_ai_creation_batch_generate(
         guard = 0
         while existing < target_chapters and guard < 100:
             guard += 1
-            # 1. 一句话 l1：有 briefs 用之，否则用基本设定拼
-            if arc_i < len(briefs):
-                l1 = briefs[arc_i]
-                arc_i += 1
+            # 1. 弧来源：量产先补完未完成弧 → 再用冻结路线图弧卡 → 精品 briefs/auto
+            roadmap_index: int | None = None
+            _resume_arc: dict[str, Any] | None = None
+            if unfinished:
+                _resume_arc = unfinished.pop(0)
+                arc_id = _resume_arc["id"]
+                arc_name = str(_resume_arc.get("name") or "")
+                try:
+                    roadmap_index = int(_resume_arc.get("roadmap_index") or 0) or None
+                except (TypeError, ValueError):
+                    roadmap_index = None
+                if roadmap_index:
+                    rm_i = max(rm_i, roadmap_index)
+                _progress(arc_index=(roadmap_index or 0), arc_name=arc_name,
+                          step=f"续跑未完成情节「{arc_name}」")
             else:
-                l1 = ac._auto_arc_brief(book_root, arc_i + 1)
-            if not l1:
-                _progress(step="无可用剧情 brief，停止")
-                break
+                if mode == "mass" and roadmap_cards:
+                    if rm_i >= len(roadmap_cards):
+                        _progress(step="路线图弧卡已用完——到路线图续写弧卡后再跑")
+                        break
+                    _card = roadmap_cards[rm_i]
+                    rm_i += 1
+                    roadmap_index = int(_card.get("index") or rm_i)
+                    l1 = str(_card.get("l1") or _card.get("title") or "").strip()
+                elif arc_i < len(briefs):
+                    l1 = briefs[arc_i]
+                    arc_i += 1
+                else:
+                    l1 = ac._auto_arc_brief(book_root, arc_i + 1)
+                if not l1:
+                    _progress(step="无可用剧情 brief，停止")
+                    break
 
-            # 2. 新建弧（carry_prev 自动衔接上一情节）
-            res = await ac.new_arc(
-                book_root, l1=l1, n_chapters=n_chapters_per_arc,
-                carry_prev=True,
-                selected=(all_selected if select_all_elements else None),
-            )
-            if not res.get("ok"):
-                _progress(step=f"new_arc 失败: {res.get('error')}")
-                break
-            arc_id = res["arc"]["id"]
-            arc_name = res["arc"].get("name", "")
-            _progress(arc_index=arc_i + 1, arc_name=arc_name,
-                      step=f"新建情节「{arc_name}」")
+                # 2. 新建弧（carry_prev 自动衔接上一情节）
+                res = await ac.new_arc(
+                    book_root, l1=l1, n_chapters=n_chapters_per_arc,
+                    carry_prev=True,
+                    selected=(all_selected if select_all_elements else None),
+                )
+                if not res.get("ok"):
+                    _progress(step=f"new_arc 失败: {res.get('error')}")
+                    break
+                arc_id = res["arc"]["id"]
+                arc_name = res["arc"].get("name", "")
+                # 量产：把路线图弧号记在弧上（续跑补完依据）
+                if roadmap_index:
+                    try:
+                        _arcs_now = ac.load_arcs(book_root)
+                        _a_now = ac._find_arc(_arcs_now, arc_id)
+                        if _a_now is not None:
+                            _a_now["roadmap_index"] = roadmap_index
+                            ac.save_arcs(book_root, _arcs_now)
+                    except Exception:  # noqa: BLE001
+                        pass
+                _progress(arc_index=(roadmap_index or arc_i + 1), arc_name=arc_name,
+                          step=f"新建情节「{arc_name}」")
 
             # 3. 逐级推进 l2 → l3 → 逐章 l4/l5 → 落盘
             #    单步 LLM 调用带超时（l4 场景分解是慢调用给 300s，其余 180s）防超长响应卡死；
             #    单章失败跳过继续，不废整本
             import asyncio as _asyncio
 
-            _STEP_TIMEOUT = {"l2": 180, "l3": 180, "l4": 300, "l5": 180}
+            # 【T32 P4】量产 fast 给更宽的 LLM 超时（慢调用多，失败重试有成本）；精品不变
+            _STEP_TIMEOUT = ({"l2": 240, "l3": 240, "l4": 420, "l5": 300}
+                             if mode == "mass"
+                             else {"l2": 180, "l3": 180, "l4": 300, "l5": 180})
 
-            async def _step_timeout(label: str, want: str = "l5") -> dict | None:
+            async def _step_timeout(label: str, want: str = "l5", **kw) -> dict | None:
                 try:
                     return await _asyncio.wait_for(
-                        ac.arc_step(book_root, arc_id),
+                        ac.arc_step(book_root, arc_id, **kw),
                         timeout=_STEP_TIMEOUT.get(want, 180))
                 except _asyncio.TimeoutError:
                     _progress(step=f"{label} LLM 超时（>{_STEP_TIMEOUT.get(want, 180)}s），跳过本章")
                     return None
 
+            # 续跑弧若 l3 已确认，跳过 l2/l3 生成（否则会把 l4/l5 提前生成掉）
+            _l3_done = bool(
+                (((_resume_arc or {}).get("state") or {}).get("levels") or {})
+                .get("l3", {}).get("confirmed")) if _resume_arc else False
             l3_ok = True
-            for want in ("l2", "l3"):
-                r = await _step_timeout(want, want)
-                if r is None:
-                    l3_ok = False
-                    break
-                if not r.get("ok"):
-                    _progress(step=f"{want} 生成失败: {r.get('error')}")
-                    l3_ok = False
-                    break
-                cr = ac.arc_confirm(book_root, arc_id, want)
-                if not cr.get("ok"):
-                    _progress(step=f"{want} 确认失败: {cr.get('error')}")
-                    l3_ok = False
-                    break
-                _progress(step=f"{want} 完成")
+            if not _l3_done:
+                for want in ("l2", "l3"):
+                    _kw = {"roadmap_index": roadmap_index} if (want == "l2" and roadmap_index) else {}
+                    r = await _step_timeout(want, want, **_kw)
+                    if r is None:
+                        l3_ok = False
+                        break
+                    if not r.get("ok"):
+                        _progress(step=f"{want} 生成失败: {r.get('error')}")
+                        l3_ok = False
+                        break
+                    cr = ac.arc_confirm(book_root, arc_id, want)
+                    if not cr.get("ok"):
+                        _progress(step=f"{want} 确认失败: {cr.get('error')}")
+                        l3_ok = False
+                        break
+                    _progress(step=f"{want} 完成")
             if not l3_ok:
                 ac.arc_finish(book_root, arc_id)
                 _progress(step=f"情节「{arc_name}」l2/l3 异常，跳过本章")
                 continue
 
+            max_attempts = 2 if mode == "mass" else 1
+            _finalized = set(str(k) for k in ((_resume_arc or {}).get("finalized") or {}).keys())
             for idx in range(n_chapters_per_arc):
                 if existing >= target_chapters:
                     break
-                if n_chapters_per_arc > 1:
-                    r = ac.arc_set_active_chapter(book_root, arc_id, idx)
-                    if not r.get("ok"):
-                        _progress(step=f"第{idx + 1}章 切章失败: {r.get('error')}")
-                        break
-                ok = True
-                for want in ("l4", "l5"):
-                    r = await _step_timeout(f"第{idx + 1}章 {want}", want)
-                    if r is None:
-                        ok = False
-                        break
-                    if not r.get("ok"):
-                        _progress(step=f"第{idx + 1}章 {want} 失败: {r.get('error')}")
-                        ok = False
-                        break
-                    cr = ac.arc_confirm(book_root, arc_id, want)
-                    if not cr.get("ok"):
-                        _progress(step=f"第{idx + 1}章 {want} 确认失败: {cr.get('error')}")
-                        ok = False
-                        break
-                if not ok:
-                    _progress(step=f"第{idx + 1}章 生成异常，跳过该章")
+                if str(idx) in _finalized:
                     continue
-                try:
-                    fr = await _asyncio.wait_for(
-                        ac.finalize_chapter(book_root, arc_id, chapter_idx=idx),
-                        timeout=180)
-                except _asyncio.TimeoutError:
-                    _progress(step=f"第{idx + 1}章 落盘超时，跳过")
-                    continue
-                if not fr.get("ok"):
-                    _progress(step=f"第{idx + 1}章 落盘失败: {fr.get('error')}")
-                    continue
-                existing += 1
-                _progress(done=existing, last_chapter=fr.get("chapter", 0),
-                          step=f"第{idx + 1}章 落盘 ✓（第{fr.get('chapter', 0):04d}章）")
+                chapter_ok = False
+                last_err = ""
+                for attempt in range(max_attempts):
+                    if n_chapters_per_arc > 1:
+                        r = ac.arc_set_active_chapter(book_root, arc_id, idx)
+                        if not r.get("ok"):
+                            last_err = f"切章失败: {r.get('error')}"
+                            break
+                    ok = True
+                    for want in ("l4", "l5"):
+                        r = await _step_timeout(f"第{idx + 1}章 {want}", want)
+                        if r is None:
+                            ok = False
+                            last_err = f"{want} 超时"
+                            break
+                        if not r.get("ok"):
+                            ok = False
+                            last_err = f"{want} 失败: {r.get('error')}"
+                            break
+                        cr = ac.arc_confirm(book_root, arc_id, want)
+                        if not cr.get("ok"):
+                            ok = False
+                            last_err = f"{want} 确认失败: {cr.get('error')}"
+                            break
+                    if not ok:
+                        if attempt + 1 < max_attempts:
+                            _progress(step=f"第{idx + 1}章 生成异常（{last_err}），自动重试一轮")
+                        continue
+                    try:
+                        fr = await _asyncio.wait_for(
+                            ac.finalize_chapter(book_root, arc_id, chapter_idx=idx,
+                                                skip_score=(mode == "mass")),
+                            timeout=180)
+                    except _asyncio.TimeoutError:
+                        last_err = "落盘超时"
+                        fr = None
+                    if fr is not None and fr.get("ok"):
+                        chapter_ok = True
+                        existing += 1
+                        _progress(done=existing, last_chapter=fr.get("chapter", 0),
+                                  step=f"第{idx + 1}章 落盘 ✓（第{fr.get('chapter', 0):04d}章）")
+                        break
+                    if fr is not None and not fr.get("ok"):
+                        last_err = f"落盘失败: {fr.get('error')}"
+                    if attempt + 1 < max_attempts:
+                        _progress(step=f"第{idx + 1}章 {last_err}，自动重试一轮")
+                if not chapter_ok:
+                    failures.append({"arc": arc_name, "idx": idx + 1, "error": last_err or "未知错误"})
+                    _progress(step=f"第{idx + 1}章 失败（{last_err}），记入失败区")
 
             ac.arc_finish(book_root, arc_id)
             _progress(step=f"情节「{arc_name}」完成")
 
-        tasks[task_id]["result"] = {"chapters": existing, "target": target_chapters}
+        usage = get_run_usage(run_id)
+        elapsed = round(_time.time() - _t_start, 1)
+        stats = {"chapters": existing, "target": target_chapters, "mode": mode,
+                 "elapsed_s": elapsed, "usage": usage, "failures": failures}
+        tasks[task_id]["result"] = stats
+        tasks[task_id]["progress"]["stats"] = stats
         tasks[task_id]["status"] = "done" if existing >= target_chapters else "stopped"
+        _write_mass_report(book_root, run_id, stats)
         rollout.append_event(
             book_root, run_id,
             "run_completed" if existing >= target_chapters else "run_aborted",
             kind="batch_generate",
-            data={"chapters": existing, "target": target_chapters})
+            data=stats)
     except Exception as e:  # noqa: BLE001
         tasks[task_id]["status"] = "failed"
         tasks[task_id]["error"] = f"{type(e).__name__}: {e}"[:600]
@@ -3175,6 +3567,11 @@ async def _do_ai_creation_batch_generate(
         rollout.append_event(
             book_root, run_id, "run_failed", kind="batch_generate",
             data={"error": tasks[task_id]["error"]})
+    finally:
+        # 运行上下文复位（防泄漏到后续任务/请求）
+        runtime_flags.set_fast(False)
+        runtime_flags.set_model(None)
+        set_llm_run_id("")
 
 
 class RunsRequest(AiCreationBookRequest):
@@ -3208,6 +3605,50 @@ async def ai_creation_run_detail(req: RunDetailRequest) -> dict[str, Any]:
     events = list(rollout.reverse_scan(path, max_records=0))  # 倒扫全部
     return {"ok": True, "run_id": req.run_id, "count": len(events),
             "events": list(reversed(events))}
+
+
+# ── 【T32 P5】量产补评：rescore-deferred + 待补评计数 ──────────────
+
+class AiRescoreRequest(AiCreationBookRequest):
+    arc_id: str = Field("", description="只补评该弧（空=全书）")
+
+
+@router.get("/ai-creation/deferred-count")
+async def ai_creation_deferred_count(book_root: str) -> dict[str, Any]:
+    """量产跳过评分（score_deferred）的章节数。"""
+    from . import ai_creation as ac
+    arcs = ac.load_arcs(book_root)
+    n = sum(1 for a in arcs.get("arcs", [])
+            for c in (a.get("chapters") or [])
+            if c.get("score_deferred"))
+    return {"ok": True, "count": n}
+
+
+@router.post("/ai-creation/rescore-deferred")
+async def ai_creation_rescore_deferred(req: AiRescoreRequest) -> dict[str, str]:
+    """异步补评：对 score_deferred 章节重跑双评分并回写报告。
+    进度走 /optimize/status/{task_id}（type=ai_creation_rescore_deferred）。"""
+    task_id = start_task("ai_creation_rescore_deferred", progress={
+        "messages": ["正在补评跳过的章节…"], "done": 0, "total": 0})
+    _safe_start_task(task_id, _do_ai_creation_rescore(task_id, req.book_root, req.arc_id))
+    return {"task_id": task_id}
+
+
+async def _do_ai_creation_rescore(task_id: str, book_root: str, arc_id: str) -> None:
+    from . import ai_creation as ac
+
+    def _on(done: int, total: int, label: str) -> None:
+        p = tasks[task_id]["progress"]
+        p.update({"done": done, "total": total})
+        p["messages"].append(f"[{done}/{total}] 已补评 {label}")
+
+    try:
+        r = await ac.rescore_deferred(book_root, arc_id=arc_id, on_progress=_on)
+        tasks[task_id]["result"] = r
+        tasks[task_id]["status"] = "done" if r.get("ok") else "failed"
+    except Exception as e:  # noqa: BLE001
+        tasks[task_id]["status"] = "failed"
+        tasks[task_id]["error"] = str(e)[:300]
 
 
 # ---------------------------------------------------------------------------
@@ -3335,6 +3776,59 @@ app = None
 # （主系统的 PromptHarnessPage 通过 HashRouter 工作，
 #  这些路由实际上很少触发，保留是为了兼容性）
 
+# 注意：本文件尾部的 GET 路由会被上面的 spa_fallback 吞掉（Starlette 按注册顺序匹配），
+# 因此新增 GET 端点必须定义在此行之前（T35 preview 端点即因此上移）。
+
+@router.get("/ai-creation/adaptation/preview")
+async def ai_adaptation_preview(book_root: str, pack_id: str):
+    """返回 pack 的 preview.html（inkjs 调试页，浏览器直接打开；T35 前端接线）。"""
+    from fastapi.responses import FileResponse
+
+    adapt_root = _adaptation_pack_root(book_root)
+    pack_dir = _adaptation_safe_pack_dir(adapt_root, pack_id)
+    if not pack_dir.is_dir() and not pack_id.endswith(".failed"):
+        failed_dir = adapt_root / f"{pack_id}.failed"
+        if failed_dir.is_dir():
+            pack_dir = failed_dir
+    f = pack_dir / "preview.html"
+    if not f.is_file():
+        raise HTTPException(status_code=404, detail="该 pack 没有 preview.html（ink 编译失败时不会生成）")
+    return FileResponse(str(f), media_type="text/html")
+
+
+@router.get("/ai-creation/drama/media")
+async def ai_drama_media(book_root: str, pack_id: str = "", name: str = ""):
+    """漫剧媒体文件只读出口（T36）：pack 内成片/字幕/封面 + films/ 导出产物。
+
+    白名单限定文件名，防路径穿越；视频用 FileResponse（支持 Range 断点）。
+    """
+    from fastapi.responses import FileResponse
+
+    _PACK_FILES = {
+        "drama/drama_preview.mp4", "drama/trailer_preview.mp4", "drama/cover.jpg",
+        "drama/subtitles.srt", "drama/subtitles.en.srt", "drama/shots.json", "preview.html",
+    }
+    root = Path(book_root)
+    if not (root / ".ainovel").is_dir():
+        raise HTTPException(status_code=404, detail="不是有效的书目录")
+    if pack_id and name in _PACK_FILES:
+        if (not pack_id.strip() or pack_id in (".", "..") or "/" in pack_id
+                or "\\" in pack_id or pack_id.startswith(".")):
+            raise HTTPException(status_code=400, detail="非法 pack_id")
+        f = root / ".ainovel" / "adaptation" / pack_id / name
+        if f.is_file():
+            media = "video/mp4" if name.endswith(".mp4") else None
+            return FileResponse(str(f), media_type=media)
+    if name.startswith("films/"):
+        base = name[len("films/"):]
+        if base and "/" not in base and "\\" not in base and not base.startswith("."):
+            f = root / ".ainovel" / "films" / base
+            if f.is_file():
+                media = "video/mp4" if base.endswith(".mp4") else None
+                return FileResponse(str(f), media_type=media)
+    raise HTTPException(status_code=404, detail="媒体文件不存在")
+
+
 @router.get("/{full_path:path}", include_in_schema=False)
 async def spa_fallback(full_path: str) -> Any:
     """SPA 路由回退到 index.html。"""
@@ -3372,3 +3866,607 @@ if __name__ == "__main__":
     print("  http://127.0.0.1:8765/prompt-harness/")
     print("=" * 60)
     sys.exit(1)
+
+
+# ============================================================
+# 改编层 v0（Adaptation Pack）— 《改编层 v0 设计规格》§12
+# pack 目录：<book>/.ainovel/adaptation/<pack_id>/（校验失败为 <pack_id>.failed/）
+# 构建为同步返回（LLM 调用 ≤4 次/包）；路径参数一律做目录名白名单校验防穿越。
+# ============================================================
+
+class AiAdaptationBuildRequest(BaseModel):
+    """POST /ai-creation/adaptation/build 入参（spec §12）。"""
+    book_root: str = Field(..., min_length=1, description="主系统书根目录绝对路径")
+    arc_ids: list[str] = Field(..., min_length=1, description="弧 id 列表（v0 一弧一包，逐弧构建）")
+    ending_count: int = Field(2, description="结局数（v0 固定 2）")
+    options: dict[str, Any] = Field(default_factory=dict, description="预留构建选项")
+
+
+class AiAdaptationPacksRequest(BaseModel):
+    """POST /ai-creation/adaptation/packs 入参。"""
+    book_root: str = Field(..., min_length=1, description="主系统书根目录绝对路径")
+
+
+class AiAdaptationPackRequest(BaseModel):
+    """POST /ai-creation/adaptation/pack 入参。"""
+    book_root: str = Field(..., min_length=1, description="主系统书根目录绝对路径")
+    pack_id: str = Field(..., min_length=1, description="pack 目录名（如 pack_testbook_arc_x_ab12cd）")
+    include: list[str] = Field(
+        default_factory=list,
+        description="按需附加的大文件键：story/characters/world/assets/interaction/llm_zones/ink")
+
+
+class AiAdaptationPackDeleteRequest(BaseModel):
+    """POST /ai-creation/adaptation/pack/delete 入参。"""
+    book_root: str = Field(..., min_length=1, description="主系统书根目录绝对路径")
+    pack_id: str = Field(..., min_length=1, description="pack 目录名")
+
+
+def _adaptation_pack_root(book_root: str) -> Path:
+    """校验书目录并返回 adaptation 根目录（不存在时也先返回路径）。"""
+    root = Path(book_root)
+    if not (root / ".ainovel").is_dir():
+        raise HTTPException(status_code=404, detail=f"不是有效的书目录（缺 .ainovel/）：{book_root}")
+    return root / ".ainovel" / "adaptation"
+
+
+def _adaptation_safe_pack_dir(adapt_root: Path, pack_id: str) -> Path:
+    """pack_id → pack 目录；目录名白名单校验，防路径穿越。"""
+    if (not pack_id.strip() or pack_id in (".", "..")
+            or "/" in pack_id or "\\" in pack_id or pack_id.startswith(".")):
+        raise HTTPException(status_code=400, detail=f"非法 pack_id：{pack_id!r}")
+    return adapt_root / pack_id
+
+
+# spec §5.1 pack.json files 索引允许按需读取的键 → 相对路径
+_ADAPTATION_FILE_KEYS = {
+    "story": "story.json",
+    "characters": "characters.json",
+    "world": "world.json",
+    "assets": "assets.json",
+    "interaction": "interaction.json",
+    "llm_zones": "llm_zones.json",
+    "ink": "ink/story.ink.json",
+}
+
+
+@router.post("/ai-creation/adaptation/build")
+async def ai_adaptation_build(req: AiAdaptationBuildRequest) -> dict[str, Any]:
+    """构建 Adaptation Pack（spec §12；v0 同步返回，一弧一包）。
+
+    返回 {"ok", "results": [{ok, pack_id, pack_dir, validation, ...}], "error"}；
+    单弧失败不中断其余弧；数据问题（缺 .ainovel/、无 l4 快照）按弧记录在 results。
+    """
+    from .adaptation.cli import build_pack
+    from .adaptation.loader import AdaptationError
+
+    results: list[dict[str, Any]] = []
+    for arc_id in req.arc_ids:
+        try:
+            result = await build_pack(req.book_root, arc_id, req.ending_count)
+            results.append(result)
+        except AdaptationError as exc:
+            results.append({
+                "ok": False, "arc_id": arc_id, "error": str(exc)[:500],
+            })
+        except Exception as exc:  # noqa: BLE001
+            results.append({
+                "ok": False, "arc_id": arc_id,
+                "error": f"构建异常：{exc}", "traceback": traceback.format_exc()[-1500:],
+            })
+    return {
+        "ok": all(r.get("ok") for r in results),
+        "results": results,
+        "pack_dirs": [r.get("pack_dir") for r in results if r.get("pack_dir")],
+    }
+
+
+@router.post("/ai-creation/adaptation/packs")
+async def ai_adaptation_packs(req: AiAdaptationPacksRequest) -> dict[str, Any]:
+    """列出某书的全部 pack（按 mtime 降序；含 .failed 目录并标记 failed）。"""
+    adapt_root = _adaptation_pack_root(req.book_root)
+    packs: list[dict[str, Any]] = []
+    if adapt_root.is_dir():
+        for d in sorted(adapt_root.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not d.is_dir():
+                continue
+            name = d.name
+            failed = name.endswith(".failed")
+            entry: dict[str, Any] = {
+                "pack_id": name[:-len(".failed")] if failed else name,
+                "dir": name,
+                "failed": failed,
+                "mtime": datetime.fromtimestamp(d.stat().st_mtime, timezone.utc).isoformat(),
+                "pack": None,
+                "validation": None,
+            }
+            try:
+                entry["pack"] = json.loads((d / "pack.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
+            try:
+                v = json.loads((d / "validation.json").read_text(encoding="utf-8"))
+                entry["validation"] = {
+                    "ok": v.get("ok"),
+                    "errors": len(v.get("errors") or []),
+                    "warnings": len(v.get("warnings") or []),
+                    "stats": v.get("stats") or {},
+                }
+            except (OSError, json.JSONDecodeError):
+                pass
+            packs.append(entry)
+    return {"ok": True, "book_root": req.book_root, "packs": packs}
+
+
+@router.post("/ai-creation/adaptation/pack")
+async def ai_adaptation_pack(req: AiAdaptationPackRequest) -> dict[str, Any]:
+    """取单个 pack 的 pack.json + validation.json；大文件经 include 按需附加。"""
+    adapt_root = _adaptation_pack_root(req.book_root)
+    pack_dir = _adaptation_safe_pack_dir(adapt_root, req.pack_id)
+    if not pack_dir.is_dir() and not req.pack_id.endswith(".failed"):
+        failed_dir = adapt_root / f"{req.pack_id}.failed"
+        if failed_dir.is_dir():
+            pack_dir = failed_dir
+    if not pack_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"pack 不存在：{req.pack_id}")
+
+    def _read(rel: str) -> Any:
+        try:
+            return json.loads((pack_dir / rel).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    files: dict[str, Any] = {}
+    for key in req.include or []:
+        rel = _ADAPTATION_FILE_KEYS.get(key)
+        if rel:
+            files[key] = _read(rel)
+    return {
+        "ok": True,
+        "pack_id": req.pack_id,
+        "dir": pack_dir.name,
+        "failed": pack_dir.name.endswith(".failed"),
+        "pack": _read("pack.json"),
+        "validation": _read("validation.json"),
+        "has_preview": (pack_dir / "preview.html").is_file(),
+        "files": files,
+    }
+
+
+@router.post("/ai-creation/adaptation/pack/delete")
+async def ai_adaptation_pack_delete(req: AiAdaptationPackDeleteRequest) -> dict[str, Any]:
+    """删除 pack 目录（含 .failed 变体也可删）。"""
+    adapt_root = _adaptation_pack_root(req.book_root)
+    pack_dir = _adaptation_safe_pack_dir(adapt_root, req.pack_id)
+    if not pack_dir.is_dir():
+        raise HTTPException(status_code=404, detail=f"pack 不存在：{req.pack_id}")
+    shutil.rmtree(pack_dir)
+    return {"ok": True, "deleted": pack_dir.name}
+
+
+# ============================================================
+# 漫剧线收口（T36）— /ai-creation/drama/* 与 /ai-creation/ark/*
+# 设计稿：docs/计划稿/2026-09-15-改编中心-全真交互稿.html（v9 漫剧单线）
+# 边界（T34）：外部 ark 视觉/语音保持降级（skipped/not_installed 诚实上报，
+# 不真实外呼）；本地投影 / 合成 / 账本 / 资管走真实实现。
+# ============================================================
+
+
+class _DramaPackBody(BaseModel):
+    book_root: str = Field(..., min_length=1)
+    pack_id: str = Field(..., min_length=1)
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class _DramaFilmsBody(BaseModel):
+    book_root: str = Field(..., min_length=1)
+
+
+class _DramaCompilationBody(BaseModel):
+    book_root: str = Field(..., min_length=1)
+    action: str = Field(..., min_length=1)
+    pack_id: str = ""
+    title: str = ""
+    index: int = -1
+
+
+class _DramaPublishBody(BaseModel):
+    book_root: str = Field(..., min_length=1)
+    pack_id: str = Field(..., min_length=1)
+    action: str = Field(..., min_length=1)
+    key: str = ""
+    done: bool = True
+
+
+class _DramaBatchBody(BaseModel):
+    book_root: str = Field(..., min_length=1)
+    action: str = Field(..., min_length=1)
+
+
+class _DramaKeyshotBody(BaseModel):
+    book_root: str = Field(..., min_length=1)
+    pack_id: str = Field(..., min_length=1)
+    action: str = Field(..., min_length=1)
+    index: int = 0
+
+
+class _ArkBody(BaseModel):
+    action: str = Field(..., min_length=1)
+    task_id: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class _ArkChatBody(BaseModel):
+    message: str = Field(..., min_length=1)
+    history: list[dict[str, Any]] = Field(default_factory=list)
+    ctx: str = "drama"
+
+
+def _drama_pack_dir(book_root: str, pack_id: str) -> Path:
+    from .drama import films as drama_films
+
+    try:
+        return drama_films.safe_pack_dir(book_root, pack_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/ai-creation/drama/workbench")
+async def ai_drama_workbench(req: _DramaPackBody) -> dict[str, Any]:
+    """漫剧工作台一次取全（分镜/字幕/资产/配音/关键镜头/成片/任务/预算）。"""
+    from .ark_console import get_console
+    from .drama import films as drama_films
+    from .media.asset_store import AssetStore
+
+    _drama_pack_dir(req.book_root, req.pack_id)
+    meta = drama_films.pack_meta(req.book_root, req.pack_id)
+    got = drama_films.pack_shots(req.book_root, req.pack_id, refresh=False)
+    doc = got["doc"]
+    assets = drama_films.pack_assets(req.book_root, req.pack_id, store=AssetStore())
+    voice = [a for a in assets if a["kind"] == "voice"]
+    if not voice:
+        voice = [
+            {"asset_id": f"voice_{s.get('shot_id')}", "kind": "voice", "prompt": str(s.get("text") or ""),
+             "state": "pending", "used_by": [], "content_id": None}
+            for s in (doc.get("shots") or []) if s.get("track") == "narration"
+        ][:8]
+    console = get_console()
+    films = drama_films.films_state(req.book_root)
+    return {
+        "ok": True,
+        "pack": meta["pack"],
+        "validation": meta["validation"],
+        "shots": drama_films.shots_summary(doc),
+        "srt": drama_films.srt_rows(req.book_root, req.pack_id, limit=200),
+        "assets": assets,
+        "voice": voice,
+        "keyshots": drama_films.keyshots_state(req.book_root, req.pack_id)["items"],
+        "films": films,
+        "tasks": console.list_tasks(book_root=req.book_root, limit=30),
+        "budget": console.usage()["remaining"],
+        "generated": got["generated"],
+    }
+
+
+@router.post("/ai-creation/drama/compose")
+async def ai_drama_compose(req: _DramaPackBody) -> dict[str, Any]:
+    """后台合成竖屏成片（PyAV 真合成；素材缺失走占位底/静音，如实产出）。"""
+    from .drama import films as drama_films
+    from .task_runtime import get_task, spawn_task, start_task
+
+    pack_dir = _drama_pack_dir(req.book_root, req.pack_id)
+    cfg = req.config or {}
+    task_id = start_task("drama_compose", progress={"pack_id": req.pack_id, "stage": "排队"})
+
+    async def _do() -> None:
+        import asyncio
+
+        rec = get_task(task_id)
+
+        def _work() -> dict[str, Any]:
+            if rec is not None:
+                rec["progress"] = {"pack_id": req.pack_id, "stage": "回填资产"}
+            got = drama_films.pack_shots(req.book_root, req.pack_id, refresh=False)
+            doc = got["doc"]
+            try:
+                from .drama.projector import backfill_pack_drama
+                from .media.asset_store import AssetStore as _Store
+
+                r = backfill_pack_drama(pack_dir, _Store(), shots_doc=doc, write=True)
+                doc = r.get("shots") or doc
+            except Exception:
+                pass
+            if rec is not None:
+                rec["progress"] = {"pack_id": req.pack_id, "stage": "合成中"}
+            from .drama.compose import compose_video
+
+            out = pack_dir / "drama" / "drama_preview.mp4"
+            return compose_video(
+                doc,
+                out_path=str(out),
+                burn_subtitles=bool(cfg.get("burn_subtitles", True)),
+                bgm=cfg.get("bgm") or None,
+                bgm_gain=float(cfg.get("bgm_gain", 0.30)),
+                duck_gain=float(cfg.get("duck_gain", 0.12)),
+                width=int(cfg["width"]) if cfg.get("width") else None,
+                height=int(cfg["height"]) if cfg.get("height") else None,
+            )
+
+        res = await asyncio.to_thread(_work)
+        if rec is not None:
+            rec["result"] = res
+            rec["progress"] = {"pack_id": req.pack_id, "stage": "完成"}
+        drama_films.update_episode(
+            req.book_root, req.pack_id,
+            last_compose_duration=res.get("duration") if isinstance(res, dict) else None,
+            last_compose_at=drama_films.now_iso(),
+        )
+
+    spawn_task(task_id, _do())
+    return {"ok": True, "task_id": task_id}
+
+
+@router.post("/ai-creation/drama/keyshot")
+async def ai_drama_keyshot(req: _DramaKeyshotBody) -> dict[str, Any]:
+    """关键镜头 draft / 正式两段式（Seedance；降级时如实返回 skipped/not_installed）。"""
+    from .ark_console import get_console
+    from .drama import films as drama_films
+    from .media.ark_runner import ArkRunner
+    from .media.asset_store import AssetStore
+    from .media.drivers.seedance import SeedanceDriver
+
+    _drama_pack_dir(req.book_root, req.pack_id)
+    data = drama_films.keyshots_state(req.book_root, req.pack_id)
+    items = data["items"]
+    if req.action == "reset":
+        for it in items:
+            it["stage"] = 0
+            it["result_path"] = ""
+        drama_films.save_keyshots(req.book_root, req.pack_id, data)
+        return {"ok": True, "keyshots": items}
+    if req.index < 0 or req.index >= len(items):
+        raise HTTPException(status_code=400, detail="关键镜头下标越界")
+    item = items[req.index]
+    if req.action == "draft" and item.get("stage") != 0:
+        return {"ok": False, "error": "该镜头已出过 draft"}
+    if req.action == "final" and item.get("stage") != 1:
+        return {"ok": False, "error": "需先出 draft 并审片通过"}
+    console = get_console()
+    driver = SeedanceDriver(
+        runner=ArkRunner(), store=AssetStore(), ledger=console.ledger,
+        mode="draft" if req.action == "draft" else "quality",
+    )
+    import asyncio
+
+    res = await asyncio.to_thread(driver.run, {
+        "prompt": f"关键镜头动态化：{item.get('desc') or item.get('shot_id')}（保持角色与场景一致性）",
+        "duration": 5 if req.action == "draft" else 10,
+        "pack_id": req.pack_id,
+    })
+    if res.status == "done":
+        item["stage"] = 1 if req.action == "draft" else 2
+        item["result_path"] = (res.outputs[0].get("path") if res.outputs else "") or ""
+        drama_films.save_keyshots(req.book_root, req.pack_id, data)
+    return {
+        "ok": res.status == "done",
+        "driver_status": res.status,
+        "reason": res.reason,
+        "keyshots": items,
+        "budget": console.usage()["remaining"],
+    }
+
+
+@router.post("/ai-creation/drama/films")
+async def ai_drama_films(req: _DramaFilmsBody) -> dict[str, Any]:
+    """单集列表 + 合辑状态（本书）。"""
+    from .drama import films as drama_films
+
+    return {
+        "ok": True,
+        "episodes": drama_films.episodes(req.book_root),
+        "compilations": drama_films.films_state(req.book_root).get("compilations") or [],
+    }
+
+
+@router.post("/ai-creation/drama/film/export")
+async def ai_drama_film_export(req: _DramaPackBody) -> dict[str, Any]:
+    from .drama import films as drama_films
+
+    _drama_pack_dir(req.book_root, req.pack_id)
+    return drama_films.export_episode(req.book_root, req.pack_id)
+
+
+@router.post("/ai-creation/drama/compilation")
+async def ai_drama_compilation(req: _DramaCompilationBody) -> dict[str, Any]:
+    from .drama import films as drama_films
+
+    if req.action not in ("add", "remove", "export", "list"):
+        raise HTTPException(status_code=400, detail=f"未知合辑动作：{req.action}")
+    if req.action == "list":
+        return {"ok": True, "compilation": (drama_films.films_state(req.book_root).get("compilations") or [None])[0]}
+    import asyncio
+
+    return await asyncio.to_thread(
+        drama_films.compilation_action,
+        req.book_root, req.action, req.pack_id, req.title, req.index,
+    )
+
+
+@router.post("/ai-creation/drama/publish")
+async def ai_drama_publish(req: _DramaPublishBody) -> dict[str, Any]:
+    """发布导出（清单/审核/封面/预告片/多语言/规格/发布包）。"""
+    import asyncio
+
+    from .drama import films as drama_films
+
+    _drama_pack_dir(req.book_root, req.pack_id)
+    action = req.action
+    if action == "checklist":
+        return drama_films.publish_checklist(req.book_root, req.pack_id)
+    if action == "audit":
+        r = drama_films.audit_pack(req.book_root, req.pack_id)
+        drama_films.mark_pub(req.book_root, req.pack_id, "audit", True)
+        return r
+    if action == "cover":
+        return await asyncio.to_thread(drama_films.make_cover, req.book_root, req.pack_id)
+    if action == "trailer":
+        return await asyncio.to_thread(drama_films.make_trailer, req.book_root, req.pack_id)
+    if action == "i18n":
+        return await drama_films.translate_srt_async(req.book_root, req.pack_id)
+    if action == "specs":
+        drama_films.mark_pub(req.book_root, req.pack_id, "specs", True)
+        return {"ok": True, "specs": drama_films.SPEC_ROWS}
+    if action == "package":
+        return await asyncio.to_thread(drama_films.make_publish_package, req.book_root, req.pack_id)
+    if action == "mark" and req.key:
+        return drama_films.mark_pub(req.book_root, req.pack_id, req.key, req.done)
+    raise HTTPException(status_code=400, detail=f"未知发布动作：{action}")
+
+
+@router.post("/ai-creation/drama/batch")
+async def ai_drama_batch(req: _DramaBatchBody) -> dict[str, Any]:
+    """批量出片队列（list / queue / run / pause / retry）。"""
+    from .drama import films as drama_films
+    from .task_runtime import get_task, spawn_task, start_task
+
+    action = req.action
+    if action in ("list", "queue"):
+        data = drama_films.batch_queue(req.book_root)
+        return {"ok": True, "items": data["items"], "running": data.get("running", False),
+                "paused": data.get("paused", False)}
+    if action == "pause":
+        data = drama_films.batch_state(req.book_root)
+        data["paused"] = True
+        for it in data["items"]:
+            if it.get("status") == "running":
+                it["status"] = "paused"
+        drama_films.save_batch_state(req.book_root, data)
+        return {"ok": True, "paused": True, "items": data["items"]}
+    if action == "retry":
+        data = drama_films.batch_state(req.book_root)
+        n = 0
+        for it in data["items"]:
+            if it.get("status") == "failed":
+                it["status"] = "ready"
+                it["progress"] = 0
+                it["error"] = ""
+                n += 1
+        drama_films.save_batch_state(req.book_root, data)
+        return {"ok": True, "retried": n, "items": data["items"]}
+    if action != "run":
+        raise HTTPException(status_code=400, detail=f"未知批量动作：{action}")
+
+    data = drama_films.batch_queue(req.book_root)
+    ready = [it for it in data["items"] if it.get("status") in ("ready", "paused")]
+    if not ready:
+        return {"ok": False, "error": "没有可运行的弧（缺 l4 的弧请先在创作里推进）"}
+    data["paused"] = False
+    data["running"] = True
+    drama_films.save_batch_state(req.book_root, data)
+    task_id = start_task("drama_batch", progress={"total": len(ready), "done": 0, "stage": "排队"})
+
+    async def _do() -> None:
+        import asyncio
+
+        from .adaptation.cli import build_pack
+        from .drama.compose import compose_video
+        from .drama.projector import project_to_drama
+
+        rec = get_task(task_id)
+        done = 0
+        for target in ready:
+            state = drama_films.batch_state(req.book_root)
+            if state.get("paused"):
+                for x in state["items"]:
+                    if x.get("status") == "running":
+                        x["status"] = "paused"
+                state["running"] = False
+                drama_films.save_batch_state(req.book_root, state)
+                if rec is not None:
+                    rec["progress"] = {"stage": "已暂停（可续跑）", "done": done, "total": len(ready)}
+                return
+            cur = next((x for x in state["items"] if x.get("arc_id") == target["arc_id"]), None)
+            if cur is None or cur.get("status") not in ("ready", "paused", "running"):
+                continue
+            cur["status"] = "running"
+            cur["progress"] = 8
+            cur["error"] = ""
+            drama_films.save_batch_state(req.book_root, state)
+            if rec is not None:
+                rec["progress"] = {"stage": f"构建 {cur.get('name')}", "done": done, "total": len(ready)}
+            try:
+                r = await build_pack(req.book_root, target["arc_id"], 2)
+                if not r.get("ok"):
+                    raise RuntimeError(str(r.get("error") or r.get("validation") or "构建失败")[:200])
+                pack_dir = Path(r["pack_dir"])
+                cur["progress"] = 55
+                drama_films.save_batch_state(req.book_root, state)
+
+                def _project_compose() -> dict[str, Any]:
+                    out = project_to_drama(pack_dir)
+                    mp4 = pack_dir / "drama" / "drama_preview.mp4"
+                    return compose_video(out["shots"], out_path=str(mp4))
+
+                await asyncio.to_thread(_project_compose)
+                stats = ((r.get("validation") or {}).get("stats") or {})
+                cur["status"] = "done"
+                cur["progress"] = 100
+                cur["cost"] = float(stats.get("cost_est") or 0.0)
+                cur["pack_id"] = r.get("pack_id") or ""
+                done += 1
+            except Exception as exc:  # noqa: BLE001 - 单弧失败不阻塞后续
+                cur["status"] = "failed"
+                cur["error"] = str(exc)[:300]
+            drama_films.save_batch_state(req.book_root, state)
+            if rec is not None:
+                rec["progress"] = {"stage": f"完成 {done}/{len(ready)}", "done": done, "total": len(ready)}
+        state = drama_films.batch_state(req.book_root)
+        state["running"] = False
+        drama_films.save_batch_state(req.book_root, state)
+
+    spawn_task(task_id, _do())
+    return {"ok": True, "task_id": task_id, "queued": len(ready)}
+
+
+@router.post("/ai-creation/ark")
+async def ai_ark(req: _ArkBody) -> dict[str, Any]:
+    """ark 控制台数据面（task 队列 / 模型 / 用量 / 账号 / 高级 api）。"""
+    from .ark_console import get_console
+
+    console = get_console()
+    action = req.action
+    if action == "list":
+        return {"ok": True, "tasks": console.list_tasks(
+            ctx=str(req.payload.get("ctx") or ""),
+            book_root=str(req.payload.get("book_root") or ""),
+            limit=int(req.payload.get("limit") or 50),
+        )}
+    if action == "submit":
+        return console.submit(req.payload)
+    if action == "cancel":
+        return console.cancel(req.task_id or str(req.payload.get("task_id") or ""))
+    if action == "retry":
+        return console.retry(req.task_id or str(req.payload.get("task_id") or ""))
+    if action == "fill":
+        return console.fill(req.task_id or str(req.payload.get("task_id") or ""))
+    if action == "models":
+        return console.models()
+    if action == "auth":
+        return console.auth()
+    if action == "usage":
+        return console.usage()
+    if action == "understand":
+        return await console.understand(req.payload)
+    if action == "api":
+        return console.api(str(req.payload.get("action") or ""), req.payload.get("params"))
+    raise HTTPException(status_code=400, detail=f"未知 ark 动作：{action}")
+
+
+@router.post("/ai-creation/ark/chat")
+async def ai_ark_chat(req: _ArkChatBody) -> dict[str, Any]:
+    """ark 控制台对话（真实 LLM；未配置时如实返回 error）。"""
+    from .ark_console import get_console
+
+    return await get_console().chat(req.message, history=req.history, ctx=req.ctx)
